@@ -1,5 +1,4 @@
 import torch
-from typing import Tuple
 from torch.utils.data import DataLoader
 import numpy as np
 import os
