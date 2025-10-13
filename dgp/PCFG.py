@@ -107,10 +107,6 @@ class PCFG:
                 n_pronouns: The number of pronouns in the vocabulary.
                 n_adverbs: The number of adverbs in the vocabulary.
                 n_conjunctions: The number of conjunctions in the vocabulary.
-                p_conjunctions: The probability of generating a conjunction.
-                n_prepositions: The number of prepositions in the vocabulary.
-                relative_clauses: Whether to generate relative clauses (as both adjectives and adverbs).
-                transitivity: Whether to distinguish transitive and intransitive verbs.
             * For 'expr':
                 n_digits: The number of digits in the vocabulary.
                 n_ops: The number of operations in the vocabulary.
@@ -193,10 +189,6 @@ class PCFG:
         n_pronouns: int,
         n_adverbs: int,
         n_conjunctions: int,
-        p_conjunctions: float,
-        n_prepositions: int,
-        relative_clauses: bool,
-        transitivity: bool,
     ):
         """Define the PCFG grammar.
 
@@ -352,49 +344,27 @@ class PCFG:
         vocab = {}
         vocab_size = 0
         if self.language == "english":
-            n_symbol_to_tokens = (
-                [self.n_nouns]
-                + (
-                    [self.n_verbs // 2, (self.n_verbs - self.n_verbs // 2)]
-                    if self.transitivity
-                    else [self.n_verbs]
-                )
-                + [
-                    self.n_adjectives,
-                    self.n_pronouns,
-                    self.n_adverbs,
-                    self.n_conjunctions,
-                ]
-            )
-            token_prefix = (
-                ["noun"]
-                + (["tverb", "iverb"] if self.transitivity else ["verb"])
-                + ["adj", "pro", "adv", "conj"]
-            )
-            if self.n_prepositions > 0:
-                n_symbol_to_tokens += [self.n_prepositions]
-                token_prefix += ["prep"]
-            if self.relative_clauses:
-                n_symbol_to_tokens += [2, 2]
-                token_prefix += ["relp", "rela"]
-            for prefix, n_symbol_to_token in zip(token_prefix, n_symbol_to_tokens):
-                for i in range(n_symbol_to_token):
-                    vocab[f"{prefix}{i}"] = vocab_size
-                    vocab_size += 1
+            n_symbol_to_tokens = [
+                self.n_nouns,
+                self.n_verbs,
+                self.n_adjectives,
+                self.n_pronouns,
+                self.n_adverbs,
+                self.n_conjunctions,
+            ]
+            token_prefix = ["noun", "verb", "adj", "pro", "adv", "conj"]
         elif self.language == "expr":
             n_symbol_to_tokens = [self.n_digits, self.n_ops, self.n_ops, self.n_ops]
             token_prefix = ["dig", "un", "bin", "tern"]
-            for prefix, n_symbol_to_token in zip(token_prefix, n_symbol_to_tokens):
-                for i in range(n_symbol_to_token):
-                    vocab[f"{prefix}{i}"] = vocab_size
-                    vocab_size += 1
         elif self.language == "dyck":
             n_symbol_to_tokens = [self.n_brackets, self.n_brackets]
             token_prefix = ["o", "c"]
-            for prefix, n_symbol_to_token in zip(token_prefix, n_symbol_to_tokens):
-                for i in range(n_symbol_to_token):
-                    vocab[f"{prefix}{i}"] = vocab_size
-                    vocab_size += 1
+
+        for prefix, n_symbol_to_token in zip(token_prefix, n_symbol_to_tokens):
+            for i in range(n_symbol_to_token):
+                vocab[f"{prefix}{i}"] = vocab_size
+                vocab_size += 1
+
         vocab_size = len(vocab)
 
         # Add special tokens to be used for defining sequences in dataloader
