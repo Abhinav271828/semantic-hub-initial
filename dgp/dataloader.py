@@ -1,6 +1,6 @@
 import torch
 from torch.utils.data import DataLoader
-import numpy as np
+import torch.nn.functional as F
 import os
 from .PCFG import PCFG
 import pickle as pkl
@@ -16,6 +16,7 @@ def get_dataloader(
         "n_adverbs": 10,
         "n_conjunctions": 2,
     },  # config for PCFG. see below for other languages.
+    replication=(2, 1),  # (D, T)
     alpha: float = 1e5,
     prior_type: str = "dirichlet",
     num_iters: int = 1e6,
@@ -27,7 +28,7 @@ def get_dataloader(
     """Define the PCFG dataloader.
 
     Args:
-        language: The language of the PCFG. One of ['english', 'expr', 'dyck1', 'dyck2'].
+        language: The language of the PCFG. One of ['english', 'expr', 'dyck'].
         config: The configuration of the PCFG. The keys depend on the language.
         * For 'english':
             n_nouns: The number of nouns in the vocabulary.
@@ -42,6 +43,7 @@ def get_dataloader(
             bracket: Whether to include brackets in the vocabulary.
         * For 'dyck':
             n_brackets: The number of types brackets in the vocabulary.
+        replication (D, T): Specifies replication properties; there are D datatypes with probability softmax([0, -T, ..., -(D-1)T])
         alpha (float, optional): The concentration parameter for the Dirichlet distribution. Defaults to 1e5.
         prior_type (str, optional): The type of prior distribution. Defaults to 'dirichlet'.
         num_iters (int, optional): The number of iterations to make in the training loop per epoch. Defaults to 1e6.
@@ -58,6 +60,7 @@ def get_dataloader(
     dataset = PCFGDataset(
         language=language,
         config=config,
+        replication=replication,
         alpha=alpha,
         prior_type=prior_type,
         num_iters=num_iters,
@@ -90,6 +93,7 @@ class PCFGDataset:
             "n_adverbs": 10,
             "n_conjunctions": 2,
         },  # config for PCFG. see below for other languages.
+        replication=(2, 1),
         alpha: float = 1e5,
         prior_type: str = "dirichlet",
         num_iters: int = 1e6,
@@ -114,6 +118,7 @@ class PCFGDataset:
                 bracket: Whether to include brackets in the vocabulary.
             * For 'dyck':
                 n_brackets: The number of types brackets in the vocabulary.
+            replication (D, T): Specifies replication properties; there are D datatypes with probability softmax([0, -T, ..., -(D-1)T])
             alpha (float, optional): The concentration parameter for the Dirichlet distribution. Defaults to 1e5.
             prior_type (str, optional): The type of prior distribution. Defaults to 'dirichlet'.
             num_iters (int, optional): The number of iterations to make in the training loop per epoch. Defaults to 1e6.
@@ -128,29 +133,24 @@ class PCFGDataset:
         self.num_iters = int(num_iters)
         self.max_sample_length = max_sample_length
 
-        # Instructions / tasks (NOTE: this is where the code will be changed to add tasks)
-        self.tasks_dict = {}
-        for n_task, task in enumerate(["freegen"]):
-            self.tasks_dict[f"Task{n_task}"] = task
-        self.task_tokens = list(self.tasks_dict.keys())
-        self.prior_over_tasks = [1.0]
-
         # Define the PCFG
         self.PCFG = PCFG(
             language=language,
             config=config,
+            num_types=replication[0],
             alpha=alpha,
             prior_type=prior_type,
             seed=seed,
-            tasks=self.tasks_dict,
         )
 
-        # Instruction decorator
-        self.instruction_decorator = "Task: {task_token} \n Ops: {ops} \n Out:"
-        self.decorator_length = len(
-            self.PCFG.tokenize_sentence(
-                self.instruction_decorator.format(task_token="Task0", ops="<null>")
-            )
+        self.datatype_distribution = F.softmax(
+            torch.arange(
+                start=0,
+                end=-replication[0] * replication[1],
+                step=-replication[1],
+                dtype=torch.float,
+            ),
+            dim=0,
         )
 
         ## Special tokens
@@ -158,18 +158,8 @@ class PCFGDataset:
         self.pad_token = "<pad>"
         self.pad_token_id = self.PCFG.vocab["<pad>"]
 
-        # Tokenize the task tokens
-        self.task_token_idx = {
-            t: self.PCFG.tokenize_sentence(t)[0] for t in self.task_tokens
-        }
-
         # Define the PCFG generator
         self.generator = self.PCFG.sentence_generator(num_of_samples=self.num_iters)
-
-        # Generation input template
-        self.template = torch.tensor(
-            self.PCFG.tokenize_sentence("Task: Task0 \n Ops: <null> \n Out:")
-        )
 
     def save_grammar(self, path_to_results: str):
         """
@@ -204,25 +194,18 @@ class PCFGDataset:
             # Generate a sequence from the PCFG
             sequence = self.generator.__next__()
 
+            dtype = torch.multinomial(self.datatype_distribution, 1).squeeze().item()
+
             # Tokenize the sequence
-            sequence = torch.tensor(self.PCFG.tokenize_sentence(sequence))
+            sequence = torch.tensor(self.PCFG.tokenize_sentence(sequence, dtype))
             seq_length = float(sequence.size(0))
 
-            # Define instruction (NOTE: kept null for now, but the code can be changed here to implement tasks)
-            task_token = np.random.choice(self.task_tokens, p=self.prior_over_tasks)
-            if task_token == "Task0":
-                ops = "<null>"
-            else:
-                raise ValueError(f"Invalid task token: {task_token}")
-            instr = torch.tensor(
-                self.PCFG.tokenize_sentence(
-                    self.instruction_decorator.format(task_token=task_token, ops=ops)
-                )
-            )
-
-            # Concatenate the instruction to the sequence
             sequence = torch.cat(
-                (instr, sequence, torch.tensor([self.PCFG.vocab["<eos>"]]))
+                (
+                    torch.tensor([self.PCFG.vocab["<bos>"]]),
+                    sequence,
+                    torch.tensor([self.PCFG.vocab["<eos>"]]),
+                )
             )
 
             # Truncate the sequence if it is longer than the max sequence length

@@ -1,4 +1,5 @@
 import hydra
+from nltk import data
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
@@ -14,16 +15,17 @@ from utils import save_model, move_to_device, log_train, log_eval
 
 @hydra.main(config_path="./config", config_name="conf.yaml", version_base="1.3")
 def main(cfg):
-    init_wandb(cfg, project_name="typo-correction")
+    init_wandb(cfg, project_name="sem-hub")
     set_seed(cfg.seed)
     save_config(cfg)
-    fp = open_log(cfg)
+    open_log(cfg)
     device = cfg.device  # if torch.cuda.is_available() else "cpu"
 
     # Dataloader
     dataloader = get_dataloader(
         language=cfg.data.language,
         config=cfg.data.config,
+        replication=(cfg.data.D, cfg.data.T),
         alpha=cfg.data.alpha,
         prior_type=cfg.data.prior_type,
         num_iters=cfg.data.num_iters * cfg.data.batch_size,
@@ -50,7 +52,7 @@ def main(cfg):
     train(cfg, model, dataloader, optimizer, device)
 
     # Close wandb and log file
-    cleanup(cfg, fp)
+    cleanup(cfg)
 
 
 def train(cfg, model, dataloader, optimizer, device):
@@ -69,13 +71,9 @@ def train(cfg, model, dataloader, optimizer, device):
     # Configuration
     total_steps = len(dataloader) * cfg.epochs
 
-    # Initialize losses (NOTE: Records losses for each task token as well as the total loss)
-    train_loss = {"total": []}
-    for k in dataloader.dataset.tasks_dict.keys():
-        train_loss[k] = []
-    lr, it, save_tables = 0.0, 0, 0
+    loss, lr, it, save_tables = 0.0, 0.0, 0, 0
     print("Total training steps: ", total_steps)
-    print("Learning rate warmup steps: ", cfg.optimizer.warmup_iters)
+    print("Learning rate warmup steps: ", cfg.data.num_iters)
 
     # Save initial model
     results_dir = save_model(cfg, model, optimizer, it)
@@ -87,9 +85,10 @@ def train(cfg, model, dataloader, optimizer, device):
 
     # Training loop
     for e in range(cfg.epochs):
-        for sequences, seq_lengths, idx, err in tqdm(
-            dataloader, desc=f"Epoch {e}", total=cfg.optimizer.total_iters
-        ):
+        for (
+            sequences,
+            seq_lengths,
+        ) in tqdm(dataloader, desc=f"Epoch {e}", total=len(dataloader)):
             if (
                 it > cfg.optimizer.total_iters
             ):  # Training destabilizes after a certain point when the loss is too low, so we break
@@ -102,15 +101,6 @@ def train(cfg, model, dataloader, optimizer, device):
             inputs, labels = move_to_device(
                 [sequences[:, :-1], sequences[:, 1:]], device
             )
-            # CORR: This overwrites the inputs as well, so indices get out of range. See loss computation
-            # labels[labels == dataloader.dataset.pad_token_id] = -100  # Mask padding
-
-            # Task tokens
-            # NOTE: Only free generation is implemented for now. Nothing needs to change here when other tasks are implemented though.
-            samples_per_task = {
-                k: inputs[:, 1] == dataloader.dataset.task_token_idx[k]
-                for k in dataloader.dataset.task_token_idx
-            }
 
             # Sequence statistics to log as well
             train_lengths = {
@@ -121,7 +111,7 @@ def train(cfg, model, dataloader, optimizer, device):
 
             # Log train metrics
             if it % cfg.log.log_interval == 0:
-                train_loss = log_train(it, cfg.deploy, lr, train_loss, train_lengths)
+                log_train(it, cfg.deploy, lr, loss, train_lengths)
 
             # Evals
             if it % cfg.log.eval_interval == 0:
@@ -132,7 +122,6 @@ def train(cfg, model, dataloader, optimizer, device):
                     grammar_evals(
                         cfg=cfg,
                         model=model,
-                        template=dataloader.dataset.template,
                         grammar=dataloader.dataset.PCFG,
                         device=device,
                     )
@@ -158,6 +147,8 @@ def train(cfg, model, dataloader, optimizer, device):
             with torch.amp.autocast(
                 device_type="cuda" if "cuda" in device else "cpu", dtype=dt
             ):  # Mixed precision
+                # Print a few human-readable input sequences before forward pass
+
                 logits = model(inputs)  # (B, L-1, V)
                 loss = F.cross_entropy(
                     logits.reshape(-1, logits.size(-1)),
@@ -166,14 +157,9 @@ def train(cfg, model, dataloader, optimizer, device):
                     ignore_index=dataloader.dataset.pad_token_id,  # -100,
                     reduction="none",
                 )  # (B*L-1)
-                loss = loss.reshape(B, -1).mean(dim=1)  # Sum over sequence length
-
-                # Decompose loss according to task tokens
-                for k in dataloader.dataset.task_tokens:
-                    train_loss[k].append(loss[samples_per_task[k]].mean().item())
+                loss = loss.reshape(B, -1).sum(dim=1)  # Sum over sequence length
 
                 loss = loss.mean()  # Average loss
-                train_loss["total"].append(loss.item())  # Log loss
 
             # Update model
             loss.backward()  # Compute gradients

@@ -4,7 +4,7 @@ seed: 42
 
 device : "mps"
 bf16: True
-epochs: 1
+epochs: 5
 
 data:
   language: 'expr' # ['english', 'expr', 'dyck']
@@ -19,6 +19,8 @@ data:
     # n_adverbs: 2
     # n_conjunctions: 1
     # n_brackets: 2
+  D: 2 # number of distinct datatypes
+  T: 1 # each datatype has probability acc to softmax([0, -T, -2T, ..., -(D-1)T])
   alpha: 1e5 # depends on the prior type
   prior_type: 'dirichlet' # ['dirichlet', 'zipfian', 'structured_zeros', 'uniform']
   max_sample_length: 128
@@ -49,7 +51,7 @@ optimizer:
   decay_lr: True
   warmup_iters: 200
   min_lr: 9e-4
-  total_iters: 1000
+  total_iters: 1e6
 
 eval:
   save_tables: False

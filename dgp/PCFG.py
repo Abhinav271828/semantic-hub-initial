@@ -90,9 +90,9 @@ class PCFG:
             "n_adverbs": 10,
             "n_conjunctions": 2,
         },  # config depends on the language; see below
+        num_types: int = 2,
         alpha: float = 1e5,
         prior_type: str = "dirichlet",
-        tasks: dict = None,
         seed: int = 42,
     ):
         """Define the PCFG object.
@@ -113,9 +113,9 @@ class PCFG:
                 postfix: Whether the grammar is postfix or prefix.
             * For 'dyck':
                 n_brackets: The number of types brackets in the vocabulary.
+            num_types: The number of distinct datatypes (duplicates vocab these many times).
             alpha: The concentration parameter for the Dirichlet distribution.
             prior_type: The type of prior distribution.
-            tasks: The tasks to perform.
             seed: The random seed.
 
         Returns:
@@ -172,8 +172,7 @@ class PCFG:
                 f"Language {language} not supported. Options are ['english', 'expr', 'dyck1', 'dyck2']."
             )
 
-        # Tasks
-        self.tasks = tasks
+        self.num_types = num_types
 
         # Set the vocabulary
         self.vocab, self.id_to_token_map, self.vocab_size = self.gather_vocabulary()
@@ -361,29 +360,20 @@ class PCFG:
             token_prefix = ["o", "c"]
 
         for prefix, n_symbol_to_token in zip(token_prefix, n_symbol_to_tokens):
-            for i in range(n_symbol_to_token):
-                vocab[f"{prefix}{i}"] = vocab_size
-                vocab_size += 1
+            for i in range(n_symbol_to_token):  # token index
+                for j in range(self.num_types):  # datatype index
+                    vocab[f"{prefix}{i}-{j}"] = vocab_size + j
+                vocab_size += self.num_types
 
         vocab_size = len(vocab)
 
         # Add special tokens to be used for defining sequences in dataloader
         for special_token in [
             "<pad>",
-            "Task:",
-            "<null>",
-            "Ops:",
-            "Out:",
-            "\n",
+            "<bos>",
             "<eos>",
-            "<sep>",
         ]:
             vocab[special_token] = vocab_size
-            vocab_size += 1
-
-        # Add task tokens
-        for task_token in self.tasks:
-            vocab[task_token] = vocab_size
             vocab_size += 1
 
         # Create an inverse vocabulary
@@ -391,7 +381,7 @@ class PCFG:
 
         return vocab, id_to_token_map, vocab_size
 
-    def tokenize_sentence(self, sentence: str) -> List[int]:
+    def tokenize_sentence(self, sentence: str, dtype: int) -> List[int]:
         """Tokenize a sentence.
 
         Args:
@@ -410,7 +400,7 @@ class PCFG:
             if token == "" or token == " ":
                 continue
             else:
-                token_indices.append(self.vocab[token])
+                token_indices.append(self.vocab[f"{token}-{dtype}"])
 
         return token_indices
 
@@ -425,7 +415,10 @@ class PCFG:
         """
 
         # Convert the indices to tokens
-        tokens = [self.id_to_token_map[token] for token in np.array(token_indices)]
+        tokens = [
+            self.id_to_token_map[token.split("-")[0] if "-" in token else token]
+            for token in np.array(token_indices)
+        ]
 
         # Detokenize the tokens
         sentence = " ".join(tokens)
@@ -458,10 +451,6 @@ class PCFG:
             Whether the sentence is in the grammar.
         """
 
-        # Remove instruction decorator and pad tokens
-        if "Out:" in sentence:
-            sentence = sentence.split("Out: ")
-            sentence = sentence[1] if len(sentence) > 1 else sentence[0]
         if "<pad>" in sentence:
             sentence = sentence.split(" <pad>")
             sentence = sentence[0] if len(sentence) > 1 else sentence[0]
