@@ -415,10 +415,8 @@ class PCFG:
         """
 
         # Convert the indices to tokens
-        tokens = [
-            self.id_to_token_map[token.split("-")[0] if "-" in token else token]
-            for token in np.array(token_indices)
-        ]
+        tokens = [self.id_to_token_map[token] for token in np.array(token_indices)]
+        tokens = [token.split("-")[0] if "-" in token else token for token in tokens]
 
         # Detokenize the tokens
         sentence = " ".join(tokens)

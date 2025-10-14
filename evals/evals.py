@@ -32,7 +32,10 @@ def grammar_evals(cfg, model, grammar, device):
         # Transfer to CPU and detokenize
         samples = samples.cpu().numpy()
         samples = [
-            grammar.detokenize_sentence(s).split("<eos>")[0].split("<bos>")[1].strip("")
+            grammar.detokenize_sentence(s)
+            .split("<eos>")[0]
+            .split("<bos>")[1]
+            .strip(" ")
             for s in samples
         ]
 
