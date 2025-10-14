@@ -78,7 +78,10 @@ def init_wandb(cfg, project_name):
     Initialize wandb
     """
     if cfg.deploy:
-        wandb.init(project=project_name)
+        wandb.init(
+            project=project_name,
+            id=f"{cfg.data.language}-{cfg.data.D}-{cfg.data.T}-{cfg.data.num_iters * cfg.epochs:.0e}",
+        )
         wandb.run.name = wandb.run.id
         wandb.run.save()
         wandb.config.update(OmegaConf.to_container(cfg))

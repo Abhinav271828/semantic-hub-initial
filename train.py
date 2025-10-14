@@ -15,7 +15,10 @@ from utils import save_model, move_to_device, log_train, log_eval
 
 @hydra.main(config_path="./config", config_name="conf.yaml", version_base="1.3")
 def main(cfg):
-    init_wandb(cfg, project_name="sem-hub")
+    init_wandb(
+        cfg,
+        project_name="sem-hub",
+    )
     set_seed(cfg.seed)
     save_config(cfg)
     open_log(cfg)
@@ -89,12 +92,6 @@ def train(cfg, model, dataloader, optimizer, device):
             sequences,
             seq_lengths,
         ) in tqdm(dataloader, desc=f"Epoch {e}", total=len(dataloader)):
-            if (
-                it > cfg.optimizer.total_iters
-            ):  # Training destabilizes after a certain point when the loss is too low, so we break
-                save_model(cfg, model, optimizer, it)
-                break
-
             # Split sequences into inputs and labels
             # (B, L) -> (B, L-1), (B, L-1)
             B = sequences.size(0)
@@ -124,6 +121,7 @@ def train(cfg, model, dataloader, optimizer, device):
                         model=model,
                         grammar=dataloader.dataset.PCFG,
                         device=device,
+                        print_samples=cfg.log.print_gen_samples,
                     )
                     if cfg.eval.grammar
                     else (None, None)

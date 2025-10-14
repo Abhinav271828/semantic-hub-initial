@@ -2,7 +2,7 @@ import torch
 import numpy as np
 
 
-def grammar_evals(cfg, model, grammar, device):
+def grammar_evals(cfg, model, grammar, device, print_samples):
     """
     Evaluate the model on grammaticality.
 
@@ -53,8 +53,9 @@ def grammar_evals(cfg, model, grammar, device):
         failures = []
         for sid, s in enumerate(samples):
             results_grammaticality["validity"]["num"] += 1
-            # print("checking grammaticality of")
-            # print(s)
+            if sid < print_samples:
+                print("checking grammaticality of")
+                print(s)
             grammaticality, n_tokens = grammar.check_grammaticality(s)
             failures.append(grammaticality[3])
             model_logprobs.append(per_token_logprobs[sid, :n_tokens].sum().item())

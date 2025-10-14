@@ -24,7 +24,7 @@ data:
   alpha: 1e5 # depends on the prior type
   prior_type: 'dirichlet' # ['dirichlet', 'zipfian', 'structured_zeros', 'uniform']
   max_sample_length: 128
-  num_iters: 1e6
+  num_iters: 1e4
   batch_size: 128 
   # CORR: > 0 causes an error in pickling that I didn't understand.
   num_workers: 0
@@ -51,7 +51,6 @@ optimizer:
   decay_lr: True
   warmup_iters: 200
   min_lr: 9e-4
-  total_iters: 1e6
 
 eval:
   save_tables: False
@@ -63,6 +62,7 @@ log:
   eval_interval: 100
   save_interval: 100
   free: False
+  print_gen_samples: 0
 
 
 # Nested configs. Disable hydra logging
