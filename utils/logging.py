@@ -21,7 +21,7 @@ def sanity_checks(cfg, max_sample_length):
 
     # Check if BF16 is supported
     if not torch.cuda.is_available():
-        warnings.warn("WARNING: running on CPU", UserWarning)
+        warnings.warn("WARNING: cuda not available", UserWarning)
     else:
         if not torch.cuda.is_bf16_supported():
             warnings.warn("WARNING: running without BF16", UserWarning)

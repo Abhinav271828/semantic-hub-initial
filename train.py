@@ -47,6 +47,7 @@ def main(cfg):
     if cfg.model.compile:
         model = torch.compile(model)
     print("number of parameters: %.2fM" % (model.get_num_params() / 1e6,))
+    print("device:", next(model.parameters()).device)
 
     # Optimizer
     optimizer = configure_optimizers(model, cfg.optimizer)
@@ -143,7 +144,10 @@ def train(cfg, model, dataloader, optimizer, device):
             # Compute loss
             optimizer.zero_grad(set_to_none=True)  # Set gradients to None
             with torch.amp.autocast(
-                device_type="cuda" if "cuda" in device else "cpu", dtype=dt
+                device_type=(
+                    "cuda" if "cuda" in device else "mps" if "mps" in device else "cpu"
+                ),
+                dtype=dt,
             ):  # Mixed precision
                 # Print a few human-readable input sequences before forward pass
 
