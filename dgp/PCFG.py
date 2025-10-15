@@ -404,7 +404,7 @@ class PCFG:
 
         return token_indices
 
-    def detokenize_sentence(self, token_indices) -> str:
+    def detokenize_sentence(self, token_indices, retain_type=False) -> str:
         """Detokenize a sentence.
 
         Args:
@@ -416,7 +416,10 @@ class PCFG:
 
         # Convert the indices to tokens
         tokens = [self.id_to_token_map[token.item()] for token in token_indices]
-        tokens = [token.split("-")[0] if "-" in token else token for token in tokens]
+        if not retain_type:
+            tokens = [
+                token.split("-")[0] if "-" in token else token for token in tokens
+            ]
 
         # Detokenize the tokens
         sentence = " ".join(tokens)
