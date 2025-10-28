@@ -67,7 +67,10 @@ def load_model_and_grammar(
         batch_size=cfg.data.batch_size,
         num_workers=0,
     )
-    grammar = dataloader.dataset.PCFG
+    try:
+        grammar = dataloader.dataset.PCFG
+    except:
+        grammar = dataloader.dataset  # for arith
 
     return model, grammar, cfg, dataloader
 
@@ -265,7 +268,9 @@ def analyze_datatype_embedding_distances(
     with torch.no_grad():
         sequence_generator = grammar.sentence_generator(num_sequences)
         if show_progress:
-            sequence_generator = tqdm(sequence_generator, total=num_sequences, desc="Analyzing sequences")
+            sequence_generator = tqdm(
+                sequence_generator, total=num_sequences, desc="Analyzing sequences"
+            )
         for base_sequence in sequence_generator:
             # For example, base_sequence = "bin0 dig1 tern2 dig0 dig2 dig8"
             # Tokenize the same base sequence with both datatypes
@@ -294,10 +299,21 @@ def analyze_datatype_embedding_distances(
             reps1_norm = F.normalize(reps1, dim=1)  # [N, C]
             seq_sim_matrix = torch.mm(reps0_norm, reps1_norm.t())  # [N, N]
 
-            # Compute average pairwise similarity within dtype0 sequence for baseline
+            # Compute average pairwise similarity within each sequence for baseline
             if reps0.size(0) > 1:
                 # Compute cosine similarity matrix for dtype0 tokens
                 cosine_sim_within = torch.mm(reps0_norm, reps0_norm.t())  # [N, N]
+                # Extract upper triangle (excluding diagonal)
+                N = cosine_sim_within.size(0)
+                triu_indices = torch.triu_indices(N, N, offset=1)
+                upper_triangle_sims = cosine_sim_within[
+                    triu_indices[0], triu_indices[1]
+                ]
+                # Store mean similarity for this sequence
+                sequence_similarities.append(upper_triangle_sims.mean().item())
+            if reps1.size(0) > 1:
+                # Compute cosine similarity matrix for dtype0 tokens
+                cosine_sim_within = torch.mm(reps1_norm, reps1_norm.t())  # [N, N]
                 # Extract upper triangle (excluding diagonal)
                 N = cosine_sim_within.size(0)
                 triu_indices = torch.triu_indices(N, N, offset=1)
@@ -659,7 +675,11 @@ def linear_regression_datatype_separation(
 
 
 def representation_intervention_experiment(
-    model: GPT, grammar: Any, num_experiments: int = 100, verbose: bool = True, show_progress: bool = True
+    model: GPT,
+    grammar: Any,
+    num_experiments: int = 100,
+    verbose: bool = True,
+    show_progress: bool = True,
 ):
     """
     Run representation swapping experiment to test if swapping datatype representations affects generation.
