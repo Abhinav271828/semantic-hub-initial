@@ -78,9 +78,10 @@ def init_wandb(cfg, project_name):
     Initialize wandb
     """
     if cfg.deploy:
+        wandb.login()
         wandb.init(
             project=project_name,
-            id=f"{cfg.data.language}-{cfg.data.D}-{cfg.data.T}-{cfg.data.num_iters * cfg.epochs:.0e}",
+            # id=f"{cfg.data.language}-{cfg.data.D}-{cfg.data.T}-{cfg.data.num_iters * cfg.epochs:.0e}",
         )
         wandb.run.name = wandb.run.id
         wandb.run.save()
@@ -114,7 +115,7 @@ def log_train(it, deploy, lr, train_loss, train_lengths):
         for k, v in train_lengths.items():
             wandb.log({"train": {f"lengths/{k}": v}})
 
-    print("train -- iter: %d, lr: %.6f, loss: %.4f" % (it, lr, train_loss))
+    # print("train -- iter: %d, lr: %.6f, loss: %.4f" % (it, lr, train_loss))
     return train_loss
 
 
@@ -145,7 +146,7 @@ def log_eval(deploy, it, save_tables, grammaticality_results):
                     for k, v in grammaticality_results[key].items():
                         wandb.log({"grammaticality": {f"{key} ({k})": v}})
 
-    print("eval -- iter: %d" % it)
+    # print("eval -- iter: %d" % it)
 
     return save_tables + 1
 
