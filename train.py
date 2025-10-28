@@ -92,7 +92,7 @@ def train(cfg, model, dataloader, optimizer, device):
         for (
             sequences,
             seq_lengths,
-        ) in tqdm(dataloader, desc=f"Epoch {e}", total=len(dataloader)):
+        ) in tqdm(dataloader, desc=f"Epoch {e}"):
             # Split sequences into inputs and labels
             # (B, L) -> (B, L-1), (B, L-1)
             B = sequences.size(0)
@@ -144,9 +144,7 @@ def train(cfg, model, dataloader, optimizer, device):
             # Compute loss
             optimizer.zero_grad(set_to_none=True)  # Set gradients to None
             with torch.amp.autocast(
-                device_type=(
-                    "cuda" if "cuda" in device else "mps" if "mps" in device else "cpu"
-                ),
+                device_type=("cuda" if "cuda" in device else "cpu"),
                 dtype=dt,
             ):  # Mixed precision
                 # Print a few human-readable input sequences before forward pass
