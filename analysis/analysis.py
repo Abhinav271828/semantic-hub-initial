@@ -70,7 +70,7 @@ def load_model_and_grammar(
     try:
         grammar = dataloader.dataset.PCFG
     except:
-        grammar = dataloader.dataset  # for arith
+        grammar = dataloader.dataset.grammar
 
     return model, grammar, cfg, dataloader
 
