@@ -187,7 +187,98 @@ def visualize_outputs_with_logits(
         )
 
 
-def analyze_datatype_embedding_distances(
+def analyze_datatype_embedding_distances_sequences(
+    model: GPT,
+    dataloader: Any,
+    grammar: Any,
+    num_sequences: int = 10_000,
+    verbose: bool = True,
+    show_progress: bool = True,
+    showplot: bool = True,
+):
+    """Use EOS embedding to compare parallel sequences"""
+    layer1_outputs = []
+
+    def _layer1_hook(module, input, output):
+        layer1_outputs.append(output.detach().cpu())
+
+    hook_handle = model.transformer.h[0].register_forward_hook(_layer1_hook)
+
+    bos_token_id = grammar.vocab["<bos>"]
+    eos_token_id = grammar.vocab["<eos>"]
+    pad_token_id = grammar.vocab["<pad>"]
+    sequences_0 = []
+    sequences_1 = []
+    eos_idxs_0 = []
+    eos_idxs_1 = []
+
+    if show_progress:
+        iterable = tqdm(
+            range(num_sequences), total=num_sequences, desc="Analyzing sequences"
+        )
+    else:
+        iterable = range(num_sequences)
+
+    for _ in iterable:
+        sample0, sample1 = grammar.generate_sample(2)
+
+        tokens = grammar.tokenize_sentence(sample0)
+        sequence = torch.tensor(
+            [bos_token_id]
+            + tokens
+            + [eos_token_id]
+            + [pad_token_id] * (grammar.max_sample_length - len(tokens) - 2)
+        )
+        eos_idxs_0.append(len(tokens) + 1)
+        sequences_0.append(sequence)
+
+        tokens = grammar.tokenize_sentence(sample1)
+        sequence = torch.tensor(
+            [bos_token_id]
+            + grammar.tokenize_sentence(sample1)
+            + [eos_token_id]
+            + [pad_token_id] * (grammar.max_sample_length - len(tokens) - 2)
+        )
+        eos_idxs_1.append(len(grammar.tokenize_sentence(sample1)) + 1)
+        sequences_1.append(sequence)
+
+    sequences_0 = torch.stack(sequences_0, dim=0)
+    sequences_1 = torch.stack(sequences_1, dim=0)
+
+    _ = model(sequences_0)
+    all_reps_0 = layer1_outputs.pop(0)
+    eos_reps_0 = all_reps_0[torch.arange(num_sequences), eos_idxs_0, :]
+    eos_reps_0 = F.normalize(eos_reps_0, dim=-1)
+    _ = model(sequences_1)
+    all_reps_1 = layer1_outputs.pop(0)
+    eos_reps_1 = all_reps_1[torch.arange(num_sequences), eos_idxs_1, :]
+    eos_reps_1 = F.normalize(eos_reps_1, dim=-1)
+
+    hook_handle.remove()
+
+    across = torch.mm(eos_reps_0, eos_reps_1.t())
+    across_avg = across[torch.triu_indices(num_sequences, num_sequences)].mean()
+
+    within_0 = torch.mm(eos_reps_0, eos_reps_0.t())
+    within_1 = torch.mm(eos_reps_1, eos_reps_1.t())
+    avg = (
+        within_0[torch.triu_indices(num_sequences, num_sequences, offset=1)].mean()
+        + within_1[torch.triu_indices(num_sequences, num_sequences, offset=1)].mean()
+        + across[torch.triu_indices(num_sequences, num_sequences, offset=0)].mean()
+    ) / 3.0
+
+    results = {
+        "num_sequences_used": num_sequences,
+        "avg_cosine_similarity_layer1": avg,
+        "avg_cosine_similarity_dtype0_vs_dtype1": across_avg,
+    }
+
+    if verbose:
+        pprint(results)
+    return results
+
+
+def analyze_datatype_embedding_distances_tokens(
     model: GPT,
     dataloader: Any,
     grammar: Any,
@@ -220,17 +311,9 @@ def analyze_datatype_embedding_distances(
         Dictionary with analysis results and distance matrices, including:
         - avg_pairwise_cosine_similarity_layer1: Average cosine similarity within sequences
         - avg_embedding_norm_layer1: Average embedding norm
-        - overall_avg_cosine_similarity_dtype0_vs_dtype1: Per-family dtype similarities
-        - similarity_matrices: Detailed per-family similarity matrices
+        - overall_avg_cosine_similarity_dtype0_vs_dtype1: Dtype similarities
+        - similarity_matrices: Detailed similarity matrices
     """
-
-    def parse_base(name: str):
-        """Helper to parse base token name into (family, index)"""
-        m = re.match(r"^([a-zA-Z]+)(\d+)$", name)
-        if not m:
-            return None, None
-        fam, idx = m.group(1), int(m.group(2))
-        return fam, idx
 
     # Hook to capture layer 1 outputs
     layer1_outputs = []
@@ -247,16 +330,9 @@ def analyze_datatype_embedding_distances(
     eos_id = grammar.vocab["<eos>"]
     id_to_token = grammar.id_to_token_map
 
-    # Build family-wise similarity matrices
-    families = ["dig", "un", "bin", "tern"]
-    family_sizes = {"dig": 10, "un": 3, "bin": 3, "tern": 3}
-    family_accumulators = {
-        fam: {
-            "sum": torch.zeros(family_sizes[fam], family_sizes[fam]),
-            "count": torch.zeros(family_sizes[fam], family_sizes[fam]),
-        }
-        for fam in families
-    }
+    # Build similarity matrices
+    sum_sim_mtx = torch.zeros(grammar.vocab_size, grammar.vocab_size)
+    count_sim_mtx = torch.zeros(grammar.vocab_size, grammar.vocab_size)
 
     # Also compute average distance metrics
     sequence_similarities = []
@@ -297,7 +373,13 @@ def analyze_datatype_embedding_distances(
             reps1 = reps_dtype1[0, 1:-1, :]  # [L-2, C]
             reps0_norm = F.normalize(reps0, dim=1)  # [N, C]
             reps1_norm = F.normalize(reps1, dim=1)  # [N, C]
+
+            # Average pairwise similarity across datatypes
             seq_sim_matrix = torch.mm(reps0_norm, reps1_norm.t())  # [N, N]
+            for i_pos, i_tok in enumerate(seq_dtype0[0, 1:-1].tolist()):
+                for j_pos, j_tok in enumerate(seq_dtype1[0, 1:-1].tolist()):
+                    sum_sim_mtx[i_tok, j_tok] += seq_sim_matrix[i_pos, j_pos]
+                    count_sim_mtx[i_tok, j_tok] += 1
 
             # Compute average pairwise similarity within each sequence for baseline
             if reps0.size(0) > 1:
@@ -328,41 +410,12 @@ def analyze_datatype_embedding_distances(
             total_norm_sum += norms.sum().item()
             total_rep_count += norms.numel()
 
-            # Group tokens by family
-            family_positions = {fam: [] for fam in families}
-
-            for pos, token_name in enumerate(base_sequence.split()):
-                fam, idx = token_name[:-1], int(token_name[-1])
-                family_positions[fam].append((pos, idx))
-            # {'dig':  [(1, 1), (3, 0), (4, 2), (5, 8)],
-            #  'un':   [],
-            #  'bin':  [(0, 0)],
-            #  'tern': [(2, 2)]}
-
-            # Compute similarity matrices for each family
-            for fam in families:
-                pos = family_positions[fam]
-
-                if len(pos) == 0:
-                    continue
-
-                for i_pos, i_idx in pos:
-                    for j_pos, j_idx in pos:
-                        family_accumulators[fam]["sum"][i_idx, j_idx] += seq_sim_matrix[
-                            i_pos, j_pos
-                        ]
-                        family_accumulators[fam]["count"][i_idx, j_idx] += 1
-
             num_sequences_processed += 1
 
     hook_handle.remove()
 
-    # Compute final average similarity matrices
-    family_mats = {}
-    for fam in families:
-        family_mats[fam] = (
-            family_accumulators[fam]["sum"] / family_accumulators[fam]["count"]
-        )
+    # Compute final avg sim mtx
+    sim_mtx = sum_sim_mtx / count_sim_mtx
 
     # Compute average cosine similarity and embedding norm
     if len(sequence_similarities) > 0:
@@ -374,44 +427,36 @@ def analyze_datatype_embedding_distances(
         (total_norm_sum / total_rep_count) if total_rep_count > 0 else float("nan")
     )
 
-    # Plot each family matrix as a heatmap
     if showplot:
-        for fam in families:
-            mat = family_mats[fam]
-            if mat.size == 0:
-                continue
-            fig_w = max(4, min(14, 0.35 * mat.shape[1]))
-            fig_h = max(4, min(14, 0.25 * mat.shape[0]))
-            plt.figure(figsize=(fig_w, fig_h))
-            plt.imshow(mat, aspect="auto", cmap="viridis")
-            plt.colorbar(label=f"Cosine similarity: {fam}i-0 vs {fam}j-1")
-            plt.yticks(
-                np.arange(mat.shape[0]),
-                [f"{fam}{i}" for i in range(mat.shape[0])],
-                fontsize=6,
-            )
-            plt.xticks(
-                np.arange(mat.shape[1]),
-                [f"{fam}{j}" for j in range(mat.shape[1])],
-                fontsize=6,
-                rotation=90,
-            )
-            plt.title(f"Cosine similarity heatmap for {fam} (dtype 0 vs dtype 1)")
-            plt.tight_layout()
-            plt.show()
+        mat = sim_mtx
+        fig_w = max(4, min(14, 0.35 * mat.shape[1]))
+        fig_h = max(4, min(14, 0.25 * mat.shape[0]))
+        plt.figure(figsize=(fig_w, fig_h))
+        plt.imshow(mat, aspect="auto", cmap="viridis")
+        plt.colorbar(label=f"Cosine similarity: dtype-0 vs dtype-1")
+        plt.yticks(
+            np.arange(mat.shape[0]),
+            [f"{id_to_token[i]}" for i in range(mat.shape[0])],
+            fontsize=6,
+        )
+        plt.xticks(
+            np.arange(mat.shape[1]),
+            [f"{id_to_token[j]}" for j in range(mat.shape[1])],
+            fontsize=6,
+            rotation=90,
+        )
+        plt.title(f"Cosine similarity heatmap (dtype 0 vs dtype 1)")
+        plt.tight_layout()
+        plt.show()
 
     results = {
         "num_sequences_used": num_sequences_processed,
         "num_sequences_with_valid_tokens": len(sequence_similarities),
-        "avg_pairwise_cosine_similarity_layer1": avg_cosine_similarity,
+        "avg_cosine_similarity_layer1": avg_cosine_similarity,
         "avg_embedding_norm_layer1": avg_embedding_norm_layer1,
-        "num_token_pairs_per_family": {
-            fam: family_accumulators[fam]["count"] for fam in families
-        },
-        "overall_avg_cosine_similarity_dtype0_vs_dtype1": {
-            fam: family_mats[fam].mean() for fam in family_accumulators
-        },
-        "similarity_matrices": {k: v for k, v in family_mats.items()},
+        "num_token_pairs": count_sim_mtx,
+        "avg_cosine_similarity_dtype0_vs_dtype1": sim_mtx[~sim_mtx.isnan()].mean(),
+        "similarity_matrices": sim_mtx,
     }
 
     if verbose:
@@ -419,7 +464,7 @@ def analyze_datatype_embedding_distances(
     return results
 
 
-def linear_regression_datatype_separation(
+def linear_regression_datatype_separation_tokens(
     model: GPT,
     dataloader: Any,
     grammar: Any,
@@ -428,7 +473,7 @@ def linear_regression_datatype_separation(
     verbose: bool = True,
 ):
     """
-    Learn a linear regression to classify embeddings according to their datatype.
+    Learn a linear regression to classify token embeddings according to their datatype.
 
     Args:
         model: The GPT model
@@ -460,12 +505,11 @@ def linear_regression_datatype_separation(
 
         reps: List[torch.Tensor] = []
         dtypes: List[int] = []
-        families: List[str] = []
         seen = 0
 
         with torch.no_grad():
             for batch in dataloader:
-                seqs, _ = batch
+                seqs, _, _ = batch
                 B, L = seqs.size()
                 _ = model(seqs)
                 x1 = buf.pop(0)  # [B, L, C]
@@ -496,7 +540,6 @@ def linear_regression_datatype_separation(
                         fam = "".join([ch for ch in base if ch.isalpha()]) or "other"
                         reps.append(rep)
                         dtypes.append(dtype)
-                        families.append(fam)
 
                 seen += B
                 if seen >= max_sequences:
@@ -511,10 +554,10 @@ def linear_regression_datatype_separation(
             )
         X = torch.stack(reps, dim=0)  # [N, C]
         y = torch.tensor(dtypes, dtype=torch.float32)  # [N]
-        return X, y, families
+        return X, y
 
     # Gather dataset
-    X, y, fams = collect_layer1_embeddings_with_dtype(
+    X, y = collect_layer1_embeddings_with_dtype(
         model, dataloader, grammar, max_sequences=max_sequences
     )
     N, C = X.size()
@@ -579,49 +622,26 @@ def linear_regression_datatype_separation(
         X2_test = project_2d(X_test[:300])
         y2_test = y_test[:300]
 
-        # Also carry families for these points
-        fams_train = (
-            [fams[i] for i in train_idx[: len(y2_train)].tolist()]
-            if isinstance(fams, list)
-            else []
-        )
-        fams_test = (
-            [fams[i] for i in test_idx[: len(y2_test)].tolist()]
-            if isinstance(fams, list)
-            else []
-        )
-
         # Project linear boundary: w2d^T y + const = 0 where y = (x - mu) @ P2
         w2d = P2.T @ w
         const = w @ mu + b - 0.5
 
-        # Assign a color per family and marker per dtype
-        unique_fams = (
-            sorted(list(set(fams_train + fams_test))) if isinstance(fams, list) else []
-        )
-        family_to_color = {
-            fam: plt.cm.tab10(i % 10) for i, fam in enumerate(unique_fams)
-        }
         marker_map = {0.0: "o", 1.0: "x"}
 
         plt.figure(figsize=(7, 6))
         # Plot train
         for i in range(len(y2_train)):
-            fam = fams_train[i] if i < len(fams_train) else "other"
-            color = family_to_color.get(fam, "gray")
             marker = marker_map.get(float(y2_train[i].item()), "o")
             plt.scatter(
-                X2_train[i, 0], X2_train[i, 1], c=[color], marker=marker, alpha=0.7
+                X2_train[i, 0], X2_train[i, 1], c=["red"], marker=marker, alpha=0.7
             )
         # Plot test
         for i in range(len(y2_test)):
-            fam = fams_test[i] if i < len(fams_test) else "other"
-            color = family_to_color.get(fam, "gray")
             marker = marker_map.get(float(y2_test[i].item()), "o")
             plt.scatter(
                 X2_test[i, 0],
                 X2_test[i, 1],
-                c=[color],
+                c=["red"],
                 marker=marker,
                 alpha=0.9,
                 edgecolor="k",
@@ -636,19 +656,6 @@ def linear_regression_datatype_separation(
             yy = -(w2d[0].item() * xx + const.item()) / w2d[1].item()
             plt.plot(xx, yy, "k--", label="linear boundary (proj)")
 
-        # Legend proxies: one per family, plus markers for dtype
-        family_handles = [
-            Line2D(
-                [0],
-                [0],
-                marker="o",
-                color="w",
-                label=fam,
-                markerfacecolor=family_to_color[fam],
-                markersize=8,
-            )
-            for fam in unique_fams
-        ]
         dtype_handles = [
             Line2D(
                 [0],
@@ -667,7 +674,196 @@ def linear_regression_datatype_separation(
         plt.title(
             "Datatype linear regression in 2D PCA space (color=family, marker=dtype)"
         )
-        plt.legend(handles=family_handles + dtype_handles, frameon=True)
+        plt.legend(handles=dtype_handles, frameon=True)
+        plt.tight_layout()
+        plt.show()
+
+    return results
+
+
+def linear_regression_datatype_separation_sequences(
+    model: GPT,
+    dataloader: Any,
+    grammar: Any,
+    max_sequences: int = 1200,
+    showplot: bool = True,
+    verbose: bool = True,
+):
+    """
+    Learn a linear regression to classify sequences embeddings according to their datatype.
+
+    Args:
+        model: The GPT model
+        dataloader: Data loader for getting sequences
+        grammar: The PCFG grammar
+        max_sequences: Maximum number of sequences to use
+        showplot: Whether to display the PCA visualization plot
+        verbose: Whether to print detailed output (default: True)
+
+    Returns:
+        Dictionary with classification results
+    """
+
+    def collect_layer1_embeddings_with_dtype(
+        model, dataloader, grammar, max_sequences=1200, exclude_special=True
+    ):
+        """Collect layer-1 embeddings with dtype and family labels"""
+        buf = []
+
+        def _hook(module, inp, out):
+            buf.append(out.detach().cpu())
+
+        handle = model.transformer.h[0].register_forward_hook(_hook)
+
+        reps: List[torch.Tensor] = []
+        dtypes: List[int] = []
+        seen = 0
+
+        with torch.no_grad():
+            for batch in dataloader:
+                seqs, _, dts = batch
+                B, L = seqs.size()
+                _ = model(seqs)
+                x1 = buf.pop(0)  # [B, L, C]
+                seq_reps = x1[torch.arange(x1.size(0)), L + 1, :]  # eos reps
+                reps += seq_reps
+                dtypes += dts
+
+                seen += B
+                if seen >= max_sequences:
+                    break
+
+        handle.remove()
+        if len(reps) == 0:
+            return (
+                torch.empty(0, model.transformer.h[0].n_embd),
+                torch.empty(0, dtype=torch.long),
+                [],
+            )
+        X = torch.stack(reps, dim=0)  # [N, C]
+        y = torch.tensor(dtypes, dtype=torch.float32)  # [N]
+        return X, y
+
+    # Gather dataset
+    X, y = collect_layer1_embeddings_with_dtype(
+        model, dataloader, grammar, max_sequences=max_sequences
+    )
+    N, C = X.size()
+    if verbose:
+        print({"num_embeddings_collected": int(N), "embedding_dim": int(C)})
+
+    # Train/test split
+    perm = torch.randperm(N)
+    train_ratio = 0.8
+    n_train = int(train_ratio * N)
+    train_idx = perm[:n_train]
+    test_idx = perm[n_train:]
+    X_train, y_train = X[train_idx], y[train_idx]
+    X_test, y_test = X[test_idx], y[test_idx]
+
+    # Fit linear regression (least squares) with bias term
+    X_train_aug = torch.cat(
+        [X_train, torch.ones(X_train.size(0), 1)], dim=1
+    )  # [N, C+1]
+    solution = torch.linalg.lstsq(X_train_aug, y_train).solution  # [C+1]
+    w, b = solution[:-1], solution[-1]
+
+    # Predict with threshold 0.5
+    with torch.no_grad():
+        y_logits = X_test @ w + b
+        y_pred = (y_logits >= 0.5).float()
+        y_true = y_test
+
+    # Metrics: accuracy, precision, recall (positive class = dtype 1)
+    TP = ((y_pred == 1) & (y_true == 1)).sum().item()
+    TN = ((y_pred == 0) & (y_true == 0)).sum().item()
+    FP = ((y_pred == 1) & (y_true == 0)).sum().item()
+    FN = ((y_pred == 0) & (y_true == 1)).sum().item()
+
+    accuracy = (TP + TN) / max(1, len(y_true))
+    precision = TP / max(1, (TP + FP))
+    recall = TP / max(1, (TP + FN))
+
+    results = {
+        "accuracy": accuracy,
+        "precision": precision,
+        "recall": recall,
+    }
+    if verbose:
+        print(results)
+
+    # Visualization: project to 2D (PCA on train set), plot points and decision boundary
+    if showplot:
+        M_vis = min(1000, X_train.size(0))
+        X_train_sample = X_train[:M_vis]
+        # PCA via SVD
+        Xc = X_train_sample - X_train_sample.mean(dim=0, keepdim=True)
+        U, S, Vh = torch.linalg.svd(Xc, full_matrices=False)
+        P2 = Vh[:2].T  # [C, 2]
+        mu = X_train_sample.mean(dim=0)
+
+        def project_2d(X_in):
+            return (X_in - mu) @ P2  # [N, 2]
+
+        X2_train = project_2d(X_train[:300])
+        y2_train = y_train[:300]
+        X2_test = project_2d(X_test[:300])
+        y2_test = y_test[:300]
+
+        # Project linear boundary: w2d^T y + const = 0 where y = (x - mu) @ P2
+        w2d = P2.T @ w
+        const = w @ mu + b - 0.5
+
+        # Assign a color per family and marker per dtype
+        marker_map = {0.0: "o", 1.0: "x"}
+
+        plt.figure(figsize=(7, 6))
+        # Plot train
+        for i in range(len(y2_train)):
+            marker = marker_map.get(float(y2_train[i].item()), "o")
+            plt.scatter(
+                X2_train[i, 0], X2_train[i, 1], c=["red"], marker=marker, alpha=0.7
+            )
+        # Plot test
+        for i in range(len(y2_test)):
+            marker = marker_map.get(float(y2_test[i].item()), "o")
+            plt.scatter(
+                X2_test[i, 0],
+                X2_test[i, 1],
+                c=["red"],
+                marker=marker,
+                alpha=0.9,
+                edgecolor="k",
+                linewidths=0.3,
+            )
+
+        # Decision boundary line: w2d_x * x + w2d_y * y + const = 0
+        x_min = min(X2_train[:, 0].min().item(), X2_test[:, 0].min().item())
+        x_max = max(X2_train[:, 0].max().item(), X2_test[:, 0].max().item())
+        xx = np.linspace(x_min, x_max, 200)
+        if abs(w2d[1].item()) > 1e-8:
+            yy = -(w2d[0].item() * xx + const.item()) / w2d[1].item()
+            plt.plot(xx, yy, "k--", label="linear boundary (proj)")
+
+        dtype_handles = [
+            Line2D(
+                [0],
+                [0],
+                marker=marker_map[d],
+                color="k",
+                label=f"dtype {int(d)}",
+                linestyle="None",
+                markersize=8,
+            )
+            for d in [0.0, 1.0]
+        ]
+
+        plt.xlabel("PC1")
+        plt.ylabel("PC2")
+        plt.title(
+            "Datatype linear regression in 2D PCA space (color=family, marker=dtype)"
+        )
+        plt.legend(handles=dtype_handles, frameon=True)
         plt.tight_layout()
         plt.show()
 
@@ -974,7 +1170,7 @@ def main():
     parser.add_argument(
         "--distance",
         action="store_true",
-        help="Run distance analysis (average distances and datatype-specific distances)",
+        help="Run distance analysis (average distances and datatype-specific distances, per token or sequence)",
     )
     parser.add_argument(
         "--linear_regression",
@@ -1050,21 +1246,33 @@ def main():
 
     if args.all or args.distance:
         print("\n" + "=" * 50)
-        print("2. DISTANCE ANALYSIS (AVERAGE & DATATYPE-SPECIFIC)")
+        print("2. DISTANCE ANALYSIS (AVERAGE & DATATYPE-SPECIFIC))")
         print("=" * 50)
-        analyze_datatype_embedding_distances(
-            model, dataloader, grammar, num_sequences=args.num_sequences
-        )
+        match cfg.data.unit:
+            case "tok":
+                analyze_datatype_embedding_distances_tokens(
+                    model, dataloader, grammar, num_sequences=args.num_sequences
+                )
+            case "seq":
+                analyze_datatype_embedding_distances_sequences(
+                    model, dataloader, grammar, num_sequences=args.num_sequences
+                )
 
     if args.all or args.linear_regression:
         print("\n" + "=" * 50)
         print("3. LINEAR REGRESSION SEPARATING DATATYPES")
         print("=" * 50)
-        linear_regression_datatype_separation(
-            model, dataloader, grammar, max_sequences=args.max_sequences
-        )
+        match cfg.data.unit:
+            case "tok":
+                linear_regression_datatype_separation_tokens(
+                    model, dataloader, grammar, max_sequences=args.max_sequences
+                )
+            case "seq":
+                linear_regression_datatype_separation_sequences(
+                    model, dataloader, grammar, max_sequences=args.max_sequences
+                )
 
-    if args.all or args.intervention:
+    if (args.all or args.intervention) and (cfg.data.unit == "tok"):
         print("\n" + "=" * 50)
         print("4. REPRESENTATION INTERVENTION EXPERIMENT")
         print("=" * 50)

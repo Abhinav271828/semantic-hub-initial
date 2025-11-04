@@ -18,13 +18,15 @@ from collections import defaultdict
 
 from analysis.analysis import (
     load_model_and_grammar,
-    analyze_datatype_embedding_distances,
-    linear_regression_datatype_separation,
+    analyze_datatype_embedding_distances_tokens,
+    analyze_datatype_embedding_distances_sequences,
+    linear_regression_datatype_separation_tokens,
+    linear_regression_datatype_separation_sequences,
     representation_intervention_experiment,
 )
 
 
-def extract_family_distances_from_results(datatype_results: Dict) -> Dict[str, float]:
+def extract_distances_from_results(datatype_results: Dict) -> Dict[str, float]:
     """
     Extract normalized family distances from analysis results.
 
@@ -37,31 +39,12 @@ def extract_family_distances_from_results(datatype_results: Dict) -> Dict[str, f
             - 'family_distances': Dict mapping family name to normalized distance
             - 'overall_avg_distance': Average distance between any two tokens
     """
-    # Get overall average cosine similarity from datatype_results
-    overall_cosine_sim = datatype_results.get(
-        "avg_pairwise_cosine_similarity_layer1", 0.0
-    )
-    overall_avg_distance = 1.0 - overall_cosine_sim
-
-    # Extract similarity matrices from datatype results
-    overall_avg_cosine_similarity_dtype0_vs_dtype1 = datatype_results.get(
-        "overall_avg_cosine_similarity_dtype0_vs_dtype1", {}
-    )
-
-    # Compute average distance per family
-    family_distances = {}
-    for family, avg_sim in overall_avg_cosine_similarity_dtype0_vs_dtype1.items():
-        family_distances[family] = 1.0 - avg_sim
-
-    # Normalize by overall average distance
-    normalized_distances = {}
-    for family, dist in family_distances.items():
-        normalized_distances[family] = dist - overall_avg_distance
-
     return {
-        "family_distances": family_distances,
-        "overall_avg_distance": overall_avg_distance,
-        "normalized_distances": normalized_distances,
+        "overall_avg_distance": 1 - datatype_results["avg_cosine_similarity_layer1"],
+        "normalized_distances": (
+            1 - datatype_results["avg_cosine_similarity_dtype0_vs_dtype1"]
+        )
+        - (1 - datatype_results["avg_cosine_similarity_layer1"]),
     }
 
 
@@ -76,8 +59,8 @@ def analyze_checkpoint_evolution(
     and analyzes them in increasing order.
 
     For each checkpoint, computes:
-    - Token embedding distances (overall and per-family)
-    - Normalized distances between datatype 0 and 1 tokens
+    - Embedding distances (overall)
+    - Normalized distances between datatypes 0 and 1
     - Linear regression accuracy for datatype classification
 
     Args:
@@ -86,8 +69,8 @@ def analyze_checkpoint_evolution(
 
     Returns:
         Dictionary containing:
-            - 'family_trends': Family-wise normalized distance trends
-            - 'overall_distances': Overall average distances per checkpoint
+            - 'norm_distances': Normalized distance trends
+            - 'raw_distances': Overall average distances per checkpoint
             - 'accuracy_trends': Linear regression accuracy per checkpoint
     """
     # Automatically detect all available checkpoints in the directory
@@ -114,8 +97,8 @@ def analyze_checkpoint_evolution(
     print(f"Found {len(checkpoint_steps)} checkpoints: {checkpoint_steps}")
 
     # Store results across all checkpoints
-    family_trends = defaultdict(dict)  # {family: {step: normalized_distance}}
-    overall_distances = {}  # {step: overall_avg_distance}
+    distance_bw_datatypes = defaultdict(dict)  # {step: normalized_distance}
+    overall_avg_distances = {}  # {step: overall_avg_distance}
     accuracy_trends = {}  # {step: linear_regression_accuracy}
     intervention_trends = {
         "empty": {},  # {step: percentage}
@@ -136,42 +119,66 @@ def analyze_checkpoint_evolution(
             # Run all analysis functions from analysis.py
             # 1. Distance analysis (includes both average and datatype-specific distances)
             print("  [1/3] Starting distance analysis...")
-            datatype_results = analyze_datatype_embedding_distances(
-                model,
-                dataloader,
-                grammar,
-                num_sequences=num_sequences,
-                showplot=False,
-                verbose=False,
-                show_progress=True,
-            )
+            match cfg.data.unit:
+                case "tok":
+                    datatype_results = analyze_datatype_embedding_distances_tokens(
+                        model,
+                        dataloader,
+                        grammar,
+                        num_sequences=num_sequences,
+                        showplot=False,
+                        verbose=False,
+                        show_progress=True,
+                    )
+                case "seq":
+                    datatype_results = analyze_datatype_embedding_distances_sequences(
+                        model,
+                        dataloader,
+                        grammar,
+                        num_sequences=num_sequences,
+                        showplot=False,
+                        verbose=False,
+                        show_progress=True,
+                    )
             print("  [1/3] Finished distance analysis")
 
             # 2. Linear regression for datatype separation
             print("  [2/3] Starting linear regression...")
-            lr_results = linear_regression_datatype_separation(
-                model,
-                dataloader,
-                grammar,
-                max_sequences=num_sequences,
-                showplot=False,
-                verbose=False,
-            )
+            match cfg.data.unit:
+                case "tok":
+                    lr_results = linear_regression_datatype_separation_tokens(
+                        model,
+                        dataloader,
+                        grammar,
+                        max_sequences=num_sequences,
+                        showplot=False,
+                        verbose=False,
+                    )
+                case "seq":
+                    lr_results = linear_regression_datatype_separation_sequences(
+                        model,
+                        dataloader,
+                        grammar,
+                        max_sequences=num_sequences,
+                        showplot=False,
+                        verbose=False,
+                    )
             print("  [2/3] Finished linear regression")
 
-            # 3. Representation intervention experiments
-            print("  [3/3] Starting intervention experiments...")
-            intervention_results = representation_intervention_experiment(
-                model,
-                grammar,
-                num_experiments=num_sequences,
-                verbose=False,
-                show_progress=True,
-            )
-            print("  [3/3] Finished intervention experiments")
+            if cfg.data.unit == "tok":
+                # 3. Representation intervention experiments
+                print("  [3/3] Starting intervention experiments...")
+                intervention_results = representation_intervention_experiment(
+                    model,
+                    grammar,
+                    num_experiments=num_sequences,
+                    verbose=False,
+                    show_progress=True,
+                )
+                print("  [3/3] Finished intervention experiments")
 
             # Extract and normalize distances by overall average
-            distance_results = extract_family_distances_from_results(datatype_results)
+            distance_results = extract_distances_from_results(datatype_results)
 
             # Compute intervention percentages
             total_interventions = (
@@ -197,10 +204,9 @@ def analyze_checkpoint_evolution(
                 )
 
             # Store all metrics for this checkpoint
-            overall_distances[step] = distance_results["overall_avg_distance"]
+            distance_bw_datatypes[step] = distance_results["normalized_distances"]
+            overall_avg_distances[step] = distance_results["overall_avg_distance"]
             accuracy_trends[step] = lr_results["accuracy"]
-            for family, dist in distance_results["normalized_distances"].items():
-                family_trends[family][step] = dist
 
         except FileNotFoundError:
             print(f"  Error: Checkpoint not found, skipping...")
@@ -210,16 +216,16 @@ def analyze_checkpoint_evolution(
             continue
 
     return {
-        "family_trends": dict(family_trends),
-        "overall_distances": overall_distances,
+        "distance_bw_datatypes": distance_bw_datatypes,
+        "overall_distances": overall_avg_distances,
         "accuracy_trends": accuracy_trends,
         "intervention_trends": intervention_trends,
     }
 
 
 def plot_evolution_trends(
-    family_trends: Dict[str, Dict[int, float]],
-    overall_distances: Dict[int, float],
+    distance_bw_datatypes: Dict[int, float],
+    overall_avg_distances: Dict[int, float],
     accuracy_trends: Dict[int, float] = None,
     intervention_trends: Dict[str, Dict[int, float]] = None,
     save_path: str = None,
@@ -241,15 +247,18 @@ def plot_evolution_trends(
         save_path: Optional base path for saving figures (will append suffixes)
     """
     # Sort checkpoint steps
-    steps = sorted(overall_distances.keys())
+    steps = sorted(overall_avg_distances.keys())
 
     # Figure 1: Normalized distances per family
     fig1, ax1 = plt.subplots(figsize=(10, 6))
 
-    for family, trend in family_trends.items():
-        family_steps = sorted(trend.keys())
-        family_values = [trend[s] for s in family_steps]
-        ax1.plot(family_steps, family_values, marker="o", label=family, linewidth=2)
+    ax1.plot(
+        steps,
+        [distance_bw_datatypes[s] for s in steps],
+        marker="o",
+        label=family,
+        linewidth=2,
+    )
 
     ax1.axhline(y=0, color="black", linestyle="--", alpha=0.5, linewidth=1)
     ax1.set_xlabel("Training Step", fontsize=12)
@@ -273,10 +282,9 @@ def plot_evolution_trends(
     fig2, ax2 = plt.subplots(figsize=(10, 6))
 
     # Plot overall average distance
-    overall_values = [overall_distances[s] for s in steps]
     ax2.plot(
         steps,
-        overall_values,
+        [overall_avg_distances[s] for s in steps],
         marker="s",
         label="Overall avg distance",
         linewidth=2.5,
@@ -286,18 +294,15 @@ def plot_evolution_trends(
     )
 
     # Plot raw family distances (need to reconstruct from normalized)
-    for family, trend in family_trends.items():
-        family_steps = sorted(trend.keys())
-        # Raw distance = normalized_distance + overall_avg_distance
-        family_values = [trend[s] + overall_distances[s] for s in family_steps]
-        ax2.plot(
-            family_steps,
-            family_values,
-            marker="o",
-            label=f"{family} (dtype 0 vs 1)",
-            linewidth=2,
-            alpha=0.8,
-        )
+    # Raw distance = normalized_distance + overall_avg_distance
+    ax2.plot(
+        steps,
+        [distance_bw_datatypes[s] + overall_avg_distances[s] for s in steps],
+        marker="o",
+        label=f"(dtype 0 vs 1)",
+        linewidth=2,
+        alpha=0.8,
+    )
 
     ax2.set_xlabel("Training Step", fontsize=12)
     ax2.set_ylabel("Cosine Distance (1 - cosine_similarity)", fontsize=12)
