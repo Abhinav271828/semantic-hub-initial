@@ -6,7 +6,7 @@ from tqdm import tqdm
 
 from model import GPT
 from dgp import get_dataloader
-from evals import grammar_evals
+from evals import grammar_evals, arith_evals
 
 from utils import init_wandb, set_seed, save_config, open_log, cleanup
 from utils import sanity_checks, configure_optimizers, update_cosine_warmup_lr
@@ -42,7 +42,7 @@ def main(cfg):
     sanity_checks(cfg, dataloader.dataset.max_sample_length)
 
     # Define model
-    model = GPT(cfg.model, dataloader.dataset.PCFG.vocab_size)
+    model = GPT(cfg.model, dataloader.dataset.vocab_size)
     model.to(device)
     if cfg.model.compile:
         model = torch.compile(model)
@@ -89,10 +89,7 @@ def train(cfg, model, dataloader, optimizer, device):
 
     # Training loop
     for e in range(cfg.epochs):
-        for (
-            sequences,
-            seq_lengths,
-        ) in tqdm(dataloader, desc=f"Epoch {e}"):
+        for sequences, seq_lengths, dtypes in tqdm(dataloader, desc=f"Epoch {e}"):
             # Split sequences into inputs and labels
             # (B, L) -> (B, L-1), (B, L-1)
             B = sequences.size(0)
@@ -115,18 +112,32 @@ def train(cfg, model, dataloader, optimizer, device):
             if it % cfg.log.eval_interval == 0:
                 model.eval()  # Set to eval mode
 
-                # Grammaticality results
-                grammar_results_dict = (
-                    grammar_evals(
-                        cfg=cfg,
-                        model=model,
-                        grammar=dataloader.dataset.PCFG,
-                        device=device,
-                        print_samples=cfg.log.print_gen_samples,
+                if cfg.data.language in ["expr", "dyck", "english"]:
+                    # Grammaticality results
+                    grammar_results_dict = (
+                        grammar_evals(
+                            cfg=cfg,
+                            model=model,
+                            grammar=dataloader.dataset.PCFG,
+                            device=device,
+                            print_samples=cfg.log.print_gen_samples,
+                        )
+                        if cfg.eval.grammar
+                        else (None, None)
                     )
-                    if cfg.eval.grammar
-                    else (None, None)
-                )
+                else:
+                    # Arith validity results
+                    grammar_results_dict = (
+                        arith_evals(
+                            cfg=cfg,
+                            model=model,
+                            dataset=dataloader.dataset,
+                            device=device,
+                            print_samples=cfg.log.print_gen_samples,
+                        )
+                        if cfg.eval.grammar
+                        else (None, None)
+                    )
 
                 # Log eval metrics
                 save_tables = log_eval(
