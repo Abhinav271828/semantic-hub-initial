@@ -2,6 +2,61 @@ import torch
 import numpy as np
 
 
+def arith_evals(cfg, model, dataset, device, print_samples):
+    model.eval()
+    eval_bsize = 128
+    with torch.no_grad():
+        inputs = torch.tensor(dataset.vocab["<bos>"]).repeat(eval_bsize, 1).to(device)
+
+        samples, per_token_logprobs = model.sample(
+            inputs=inputs,
+            max_new_tokens=cfg.data.max_sample_length - 10,
+            retrieve_llhoods="tokens",
+        )
+
+        samples = samples.cpu().numpy()
+        samples = [
+            dataset.detokenize_sentence(s)
+            .split("<eos>")[0]
+            .split("<bos>")[1]
+            .strip(" ")
+            for s in samples
+        ]
+
+        results_grammaticality = {
+            "validity": {"num": 0, "satisfied": 0},
+            "model_logprobs": {"max": 0, "min": 0, "mean": 0},
+        }
+
+        model_logprobs = []
+        for sid, s in enumerate(samples):
+            results_grammaticality["validity"]["num"] += 1
+            if sid < print_samples:
+                print("checking grammaticality of")
+                print(s)
+            grammaticality = dataset.check_validity(s)
+            model_logprobs.append(
+                per_token_logprobs[sid, : len(s.split())].sum().item()
+            )
+
+            if grammaticality:
+                results_grammaticality["validity"]["satisfied"] += 1
+
+        model_logprobs = torch.tensor(model_logprobs).float()
+
+        # Update results
+        results_grammaticality["validity"] = (
+            results_grammaticality["validity"]["satisfied"]
+            / results_grammaticality["validity"]["num"]
+        )
+
+        results_grammaticality["model_logprobs"]["max"] = model_logprobs.max().item()
+        results_grammaticality["model_logprobs"]["min"] = model_logprobs.min().item()
+        results_grammaticality["model_logprobs"]["mean"] = model_logprobs.mean().item()
+
+        return results_grammaticality
+
+
 def grammar_evals(cfg, model, grammar, device, print_samples):
     """
     Evaluate the model on grammaticality.
