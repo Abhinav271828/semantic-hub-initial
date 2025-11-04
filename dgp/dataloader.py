@@ -3,11 +3,12 @@ from torch.utils.data import DataLoader
 import torch.nn.functional as F
 import os
 from .PCFG import PCFG
+from .arith import ArithGrammar
 import pickle as pkl
 
 
 def get_dataloader(
-    language: str = "english",  # in ['english', 'expr', 'dyck']
+    language: str = "english",  # in ['english', 'expr', 'dyck', 'arith']
     config: dict = {
         "n_nouns": 10,
         "n_verbs": 10,
@@ -56,8 +57,14 @@ def get_dataloader(
         DataLoader: A pytorch compatible, PCFG dataloader.
     """
 
-    # Create a dataset
-    dataset = PCFGDataset(
+    dataset_map = {
+        "dyck": PCFGDataset,
+        "english": PCFGDataset,
+        "expr": PCFGDataset,
+        "arith": ArithDataset,
+    }
+
+    dataset = dataset_map[language](
         language=language,
         config=config,
         replication=replication,
@@ -88,12 +95,14 @@ class ArithDataset:
 
     def __init__(
         self,
-        replication=(2, 1),
+        replication=(2, 1),  # only works with D = 2
         num_iters: int = 1e6,
         max_sample_length: int = 128,
         seed: int = 42,
+        **kwargs,
     ):
         """Initialize the ArithDataset.
+        Only works with 2 datatypes.
 
         Args:
             replication (D, T): Specifies replication properties; there are D datatypes with probability softmax([0, -T, ..., -(D-1)T])
@@ -101,11 +110,7 @@ class ArithDataset:
             max_sample_length (int, optional): The maximum length of a sequence. Defaults to 128.
             seed (int, optional): The random seed. Defaults to 42.
         """
-        import numpy as np
-
-        # Set the random seed
-        torch.manual_seed(seed)
-        np.random.seed(seed)
+        self.grammar = ArithGrammar(replication, seed)
 
         # Some setup details
         self.num_iters = int(num_iters)
@@ -125,250 +130,30 @@ class ArithDataset:
         self.num_types = replication[0]
 
         # Build vocabulary
-        self.vocab, self.id_to_token_map, self.vocab_size = self._build_vocabulary()
+        self.vocab, self.id_to_token_map, self.vocab_size = (
+            self.grammar._build_vocabulary()
+        )
 
         # Special tokens
         self.pad_token = "<pad>"
         self.pad_token_id = self.vocab["<pad>"]
 
-    def _build_vocabulary(self):
-        """Build the vocabulary for arithmetic dataset.
-
-        Includes:
-        - Digits 0-9
-        - Words for numbers 0-1998
-        - Arithmetic operators: +, =
-        - Special tokens: <pad>, <bos>, <eos>
-
-        Returns:
-            vocab: Dictionary mapping tokens to IDs
-            id_to_token_map: Dictionary mapping IDs to tokens
-            vocab_size: Size of vocabulary
+    def save_grammar(self, path_to_results: str):
         """
-        vocab = {}
-        vocab_size = 0
-
-        # Number words needed for 0-1998
-        units = [
-            "zero",
-            "one",
-            "two",
-            "three",
-            "four",
-            "five",
-            "six",
-            "seven",
-            "eight",
-            "nine",
-        ]
-        teens = [
-            "ten",
-            "eleven",
-            "twelve",
-            "thirteen",
-            "fourteen",
-            "fifteen",
-            "sixteen",
-            "seventeen",
-            "eighteen",
-            "nineteen",
-        ]
-        tens = [
-            "twenty",
-            "thirty",
-            "forty",
-            "fifty",
-            "sixty",
-            "seventy",
-            "eighty",
-            "ninety",
-        ]
-
-        # Collect all unique tokens
-        tokens = []
-
-        # Add digits 0-9
-        tokens.extend([str(i) for i in range(10)])
-
-        # Add number words
-        tokens.extend(units)
-        tokens.extend(teens)
-        tokens.extend(tens)  # Skip empty strings
-        tokens.append("hundred")
-        tokens.append("and")
-        tokens.append("thousand")
-
-        # Add arithmetic operators
-        tokens.extend(["+", "="])
-
-        # Add each token for each datatype
-        for token in tokens:
-            for dtype in range(self.num_types):
-                vocab[f"{token}-{dtype}"] = vocab_size + dtype
-            vocab_size += self.num_types
-
-        # Add special tokens
-        for special_token in ["<pad>", "<bos>", "<eos>"]:
-            vocab[special_token] = vocab_size
-            vocab_size += 1
-
-        # Create inverse vocabulary
-        id_to_token_map = {v: k for k, v in vocab.items()}
-
-        return vocab, id_to_token_map, vocab_size
-
-    @staticmethod
-    def _number_to_words(n: int) -> str:
-        """Convert a number (0-1998) to English words.
-
-        Args:
-            n: Integer between 0 and 1998
-
-        Returns:
-            String representation in words (lowercase, no punctuation)
+        Save the grammar underlying the dataset
         """
-        if n == 0:
-            return "zero"
+        base_dir = os.path.join(path_to_results, "grammar")
+        os.makedirs(base_dir, exist_ok=True)
+        with open(os.path.join(base_dir, "PCFG.pkl"), "wb") as f:
+            pkl.dump(self.grammar, f)
 
-        units = [
-            "",
-            "one",
-            "two",
-            "three",
-            "four",
-            "five",
-            "six",
-            "seven",
-            "eight",
-            "nine",
-        ]
-        teens = [
-            "ten",
-            "eleven",
-            "twelve",
-            "thirteen",
-            "fourteen",
-            "fifteen",
-            "sixteen",
-            "seventeen",
-            "eighteen",
-            "nineteen",
-        ]
-        tens = [
-            "",
-            "",
-            "twenty",
-            "thirty",
-            "forty",
-            "fifty",
-            "sixty",
-            "seventy",
-            "eighty",
-            "ninety",
-        ]
-
-        def convert_below_thousand(num):
-            if num == 0:
-                return ""
-            elif num < 10:
-                return units[num]
-            elif num < 20:
-                return teens[num - 10]
-            elif num < 100:
-                result = tens[num // 10]
-                if num % 10 != 0:
-                    result += " " + units[num % 10]
-                return result
-            else:  # num < 1000
-                result = units[num // 100] + " hundred"
-                remainder = num % 100
-                if remainder != 0:
-                    result += " and " + convert_below_thousand(remainder)
-                return result
-
-        if n < 1000:
-            return convert_below_thousand(n)
-        else:  # 1000 <= n <= 1998
-            result = convert_below_thousand(n // 1000) + " thousand"
-            remainder = n % 1000
-            if remainder != 0:
-                if remainder < 100:
-                    result += " and " + convert_below_thousand(remainder)
-                else:
-                    result += " " + convert_below_thousand(remainder)
-            return result
-
-    def _generate_arithmetic_sample(self, dtype: int):
-        """Generate a single arithmetic sample.
-
-        Args:
-            dtype: The datatype (0 for numerals, 1 for words)
-
-        Returns:
-            String representation of the arithmetic expression
+    def load_grammar(self, path_to_results: str):
         """
-        import random
-
-        # Generate two random numbers between 0 and 999
-        a = random.randint(0, 999)
-        b = random.randint(0, 999)
-        c = a + b
-
-        if dtype == 0:
-            # Numeral format: "46 + 372 = 418"
-            return f"{a} + {b} = {c}"
-        else:
-            # Word format: "forty six + three hundred and seventy two = four hundred and eighteen"
-            a_words = self._number_to_words(a)
-            b_words = self._number_to_words(b)
-            c_words = self._number_to_words(c)
-            return f"{a_words} + {b_words} = {c_words}"
-
-    def tokenize_sentence(self, sentence: str, dtype: int):
-        """Tokenize a sentence.
-
-        Args:
-            sentence: The sentence to tokenize
-            dtype: The datatype index
-
-        Returns:
-            List of token indices
+        Load and override grammar of the dataset
         """
-        # Tokenize by splitting on spaces
-        tokens = sentence.split(" ")
-
-        # Convert tokens to indices
-        token_indices = []
-        for token in tokens:
-            if token == "" or token == " ":
-                continue
-            else:
-                token_indices.append(self.vocab[f"{token}-{dtype}"])
-
-        return token_indices
-
-    def detokenize_sentence(self, token_indices, retain_type=False) -> str:
-        """Detokenize a sentence.
-
-        Args:
-            token_indices: The token indices to detokenize
-            retain_type: Whether to retain the type suffix in tokens
-
-        Returns:
-            The detokenized sentence
-        """
-        # Convert indices to tokens
-        tokens = [self.id_to_token_map[token.item()] for token in token_indices]
-
-        if not retain_type:
-            tokens = [
-                token.split("-")[0] if "-" in token else token for token in tokens
-            ]
-
-        # Join tokens with spaces
-        sentence = " ".join(tokens)
-
-        return sentence
+        base_dir = os.path.join(path_to_results, "grammar")
+        with open(os.path.join(base_dir, "PCFG.pkl"), "rb") as f:
+            self.grammar = pkl.load(f)
 
     def __len__(self):
         """Return the number of iterations made in the training loop per epoch."""
@@ -386,10 +171,10 @@ class ArithDataset:
             dtype = torch.multinomial(self.datatype_distribution, 1).squeeze().item()
 
             # Generate arithmetic sample
-            sample = self._generate_arithmetic_sample(dtype)
+            sample = self.grammar.generate_sample(dtype)
 
             # Tokenize the sequence
-            sequence = torch.tensor(self.tokenize_sentence(sample, dtype))
+            sequence = torch.tensor(self.tokenize_sentence(sample))
             seq_length = float(sequence.size(0))
 
             # Add BOS and EOS tokens
@@ -416,7 +201,7 @@ class ArithDataset:
             )
             break
 
-        return sequence, seq_length
+        return sequence, seq_length, dtype
 
 
 class PCFGDataset:
@@ -437,6 +222,7 @@ class PCFGDataset:
         num_iters: int = 1e6,
         max_sample_length: int = 128,
         seed: int = 42,
+        **kwargs,
     ):
         """Define the PCFG dataset.
 
@@ -480,6 +266,7 @@ class PCFGDataset:
             prior_type=prior_type,
             seed=seed,
         )
+        self.vocab_size = self.PCFG.vocab_size
 
         self.datatype_distribution = F.softmax(
             torch.arange(
@@ -568,4 +355,4 @@ class PCFGDataset:
                 )
                 break
 
-        return sequence, seq_length
+        return sequence, seq_length, dtype

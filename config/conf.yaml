@@ -7,7 +7,8 @@ bf16: True
 epochs: 5
 
 data:
-  language: 'expr' # ['english', 'expr', 'dyck']
+  language: 'expr' # ['english', 'expr', 'dyck', 'arith']
+  unit: 'tok' # ['seq' or 'tok']
   config:
     n_digits: 10
     n_ops: 3
@@ -57,9 +58,9 @@ eval:
   grammar: True
 
 log: 
-  save_multiple: False
-  log_interval: 10
-  eval_interval: 100
+  save_multiple: True
+  log_interval: 1000
+  eval_interval: 1000
   save_interval: 100
   free: False
   print_gen_samples: 0
