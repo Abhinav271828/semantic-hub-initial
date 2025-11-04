@@ -15,6 +15,7 @@ import os
 import re
 from typing import Dict, List, Tuple
 from collections import defaultdict
+from pprint import pprint
 
 from analysis.analysis import (
     load_model_and_grammar,
@@ -240,7 +241,6 @@ def plot_evolution_trends(
     - Figure 4: Intervention experiment percentages (empty, invalid, valid continuations)
 
     Args:
-        family_trends: Dictionary mapping family names to their normalized distance trends
         overall_distances: Dictionary mapping checkpoint steps to overall avg distances
         accuracy_trends: Dictionary mapping checkpoint steps to linear regression accuracy
         intervention_trends: Dictionary with 'empty', 'invalid', 'valid' keys, each mapping steps to percentages
@@ -256,7 +256,6 @@ def plot_evolution_trends(
         steps,
         [distance_bw_datatypes[s] for s in steps],
         marker="o",
-        label=family,
         linewidth=2,
     )
 
@@ -457,12 +456,13 @@ def main():
         run_name=args.run_name,
         num_sequences=args.num_sequences,
     )
+    pprint(results)
 
     # Generate visualization plots
     print("\n" + "=" * 60)
     print("Generating plots...")
     plot_evolution_trends(
-        family_trends=results["family_trends"],
+        normalized_distances=results["distance_bw_datatypes"],
         overall_distances=results["overall_distances"],
         accuracy_trends=results["accuracy_trends"],
         intervention_trends=results["intervention_trends"],
