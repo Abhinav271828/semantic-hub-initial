@@ -7,13 +7,10 @@ Tracks multiple metrics:
 - Linear regression accuracy for datatype classification
 """
 
-import torch
-import torch.nn.functional as F
-import numpy as np
 import matplotlib.pyplot as plt
 import os
 import re
-from typing import Dict, List, Tuple
+from typing import Dict
 from collections import defaultdict
 from pprint import pprint
 
@@ -41,7 +38,7 @@ def extract_distances_from_results(datatype_results: Dict) -> Dict[str, float]:
             - 'overall_avg_distance': Average distance between any two tokens
     """
     return {
-        "overall_avg_distance": 1 - datatype_results["avg_cosine_similarity_layer1"],
+        "overall_avg_distances": 1 - datatype_results["avg_cosine_similarity_layer1"],
         "normalized_distances": (
             1 - datatype_results["avg_cosine_similarity_dtype0_vs_dtype1"]
         )
@@ -141,6 +138,13 @@ def analyze_checkpoint_evolution(
                         verbose=False,
                         show_progress=True,
                     )
+
+            # Extract and normalize distances by overall average
+            distance_results = extract_distances_from_results(datatype_results)
+            # Store all metrics for this checkpoint
+            distance_bw_datatypes[step] = distance_results["normalized_distances"]
+            overall_avg_distances[step] = distance_results["overall_avg_distances"]
+
             print("  [1/3] Finished distance analysis")
 
             # 2. Linear regression for datatype separation
@@ -164,6 +168,7 @@ def analyze_checkpoint_evolution(
                         showplot=False,
                         verbose=False,
                     )
+            accuracy_trends[step] = lr_results["accuracy"]
             print("  [2/3] Finished linear regression")
 
             if cfg.data.unit == "tok":
@@ -176,38 +181,45 @@ def analyze_checkpoint_evolution(
                     verbose=False,
                     show_progress=True,
                 )
+
+                # Compute intervention percentages
+                total_interventions = (
+                    intervention_results["empty_continuations"]
+                    + intervention_results["invalid_nonempty_continuations"]
+                    + intervention_results["valid_nonempty_continuations"]
+                )
+                if total_interventions > 0:
+                    intervention_trends["empty"][step] = (
+                        intervention_results["empty_continuations"]
+                        / total_interventions
+                        * 100
+                    )
+                    intervention_trends["invalid"][step] = (
+                        intervention_results["invalid_nonempty_continuations"]
+                        / total_interventions
+                        * 100
+                    )
+                    intervention_trends["valid"][step] = (
+                        intervention_results["valid_nonempty_continuations"]
+                        / total_interventions
+                        * 100
+                    )
+
                 print("  [3/3] Finished intervention experiments")
 
-            # Extract and normalize distances by overall average
-            distance_results = extract_distances_from_results(datatype_results)
-
-            # Compute intervention percentages
-            total_interventions = (
-                intervention_results["empty_continuations"]
-                + intervention_results["invalid_nonempty_continuations"]
-                + intervention_results["valid_nonempty_continuations"]
-            )
-            if total_interventions > 0:
-                intervention_trends["empty"][step] = (
-                    intervention_results["empty_continuations"]
-                    / total_interventions
-                    * 100
-                )
-                intervention_trends["invalid"][step] = (
-                    intervention_results["invalid_nonempty_continuations"]
-                    / total_interventions
-                    * 100
-                )
-                intervention_trends["valid"][step] = (
-                    intervention_results["valid_nonempty_continuations"]
-                    / total_interventions
-                    * 100
-                )
-
-            # Store all metrics for this checkpoint
-            distance_bw_datatypes[step] = distance_results["normalized_distances"]
-            overall_avg_distances[step] = distance_results["overall_avg_distance"]
-            accuracy_trends[step] = lr_results["accuracy"]
+                # Write to a file after each step to prevent loss in case of break
+                # This can be plotted afterwards with `plot_from_file.py`
+                with open(f"{run_name}_trends.txt", "w") as f:
+                    f.write(
+                        {
+                            "distance_bw_datatypes": distance_bw_datatypes,
+                            "overall_avg_distances": overall_avg_distances,
+                            "accuracy_trends": accuracy_trends,
+                            "intervention_trends": (
+                                intervention_trends if cfg.data.unit == "tok" else None
+                            ),
+                        }
+                    )
 
         except FileNotFoundError:
             print(f"  Error: Checkpoint not found, skipping...")
@@ -218,9 +230,9 @@ def analyze_checkpoint_evolution(
 
     return {
         "distance_bw_datatypes": distance_bw_datatypes,
-        "overall_distances": overall_avg_distances,
+        "overall_avg_distances": overall_avg_distances,
         "accuracy_trends": accuracy_trends,
-        "intervention_trends": intervention_trends,
+        "intervention_trends": intervention_trends if cfg.data.unit == "tok" else None,
     }
 
 
@@ -360,7 +372,7 @@ def plot_evolution_trends(
 
         plt.show()
 
-    # Figure 4: Intervention experiment percentages
+    # Figure 4: Intervention experiment percentages, if they exist
     if (
         intervention_trends is not None
         and len(intervention_trends.get("empty", {})) > 0
@@ -462,8 +474,8 @@ def main():
     print("\n" + "=" * 60)
     print("Generating plots...")
     plot_evolution_trends(
-        normalized_distances=results["distance_bw_datatypes"],
-        overall_distances=results["overall_distances"],
+        distance_bw_datatypes=results["distance_bw_datatypes"],
+        overall_avg_distances=results["overall_avg_distances"],
         accuracy_trends=results["accuracy_trends"],
         intervention_trends=results["intervention_trends"],
         save_path=args.save_path,
