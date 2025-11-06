@@ -7,12 +7,12 @@ bf16: True
 epochs: 5
 
 data:
-  language: 'expr' # ['english', 'expr', 'dyck', 'arith']
-  unit: 'tok' # ['seq' or 'tok']
+  language: 'arith' # ['english', 'expr', 'dyck', 'arith']
+  unit: 'seq' # ['seq' or 'tok']
   config:
-    n_digits: 10
-    n_ops: 3
-    postfix: False
+    # n_digits: 10
+    # n_ops: 3
+    # postfix: False
     # n_nouns: 5
     # n_verbs: 5
     # n_adjectives: 5
@@ -26,7 +26,7 @@ data:
   prior_type: 'dirichlet' # ['dirichlet', 'zipfian', 'structured_zeros', 'uniform']
   max_sample_length: 128
   num_iters: 1e4
-  batch_size: 128 
+  batch_size: 128
   # CORR: > 0 causes an error in pickling that I didn't understand.
   num_workers: 0
 
