@@ -174,7 +174,7 @@ class ArithDataset:
             sample = self.grammar.generate_sample(dtype)
 
             # Tokenize the sequence
-            sequence = torch.tensor(self.tokenize_sentence(sample))
+            sequence = torch.tensor(self.grammar.tokenize_sentence(sample))
             seq_length = float(sequence.size(0))
 
             # Add BOS and EOS tokens

@@ -1,5 +1,4 @@
 import hydra
-from nltk import data
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
@@ -131,7 +130,7 @@ def train(cfg, model, dataloader, optimizer, device):
                         arith_evals(
                             cfg=cfg,
                             model=model,
-                            dataset=dataloader.dataset,
+                            grammar=dataloader.dataset.grammar,
                             device=device,
                             print_samples=cfg.log.print_gen_samples,
                         )

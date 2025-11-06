@@ -9,20 +9,17 @@ import torch.nn.functional as F
 import numpy as np
 import pickle as pkl
 import os
-import re
 import random
 import argparse
-from collections import defaultdict
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Any
 from pprint import pprint
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from matplotlib.lines import Line2D
 from tqdm import tqdm
 
-from dgp import PCFGDataset, get_dataloader
+from dgp import get_dataloader
 from model import GPT
-from evals import grammar_evals
 
 
 def load_model_and_grammar(
@@ -204,6 +201,7 @@ def analyze_datatype_embedding_distances_sequences(
 
     hook_handle = model.transformer.h[0].register_forward_hook(_layer1_hook)
 
+    max_sequence_length = dataloader.dataset.max_sample_length
     bos_token_id = grammar.vocab["<bos>"]
     eos_token_id = grammar.vocab["<eos>"]
     pad_token_id = grammar.vocab["<pad>"]
@@ -227,7 +225,7 @@ def analyze_datatype_embedding_distances_sequences(
             [bos_token_id]
             + tokens
             + [eos_token_id]
-            + [pad_token_id] * (grammar.max_sample_length - len(tokens) - 2)
+            + [pad_token_id] * (max_sequence_length - len(tokens) - 2)
         )
         eos_idxs_0.append(len(tokens) + 1)
         sequences_0.append(sequence)
@@ -237,7 +235,7 @@ def analyze_datatype_embedding_distances_sequences(
             [bos_token_id]
             + grammar.tokenize_sentence(sample1)
             + [eos_token_id]
-            + [pad_token_id] * (grammar.max_sample_length - len(tokens) - 2)
+            + [pad_token_id] * (max_sequence_length - len(tokens) - 2)
         )
         eos_idxs_1.append(len(grammar.tokenize_sentence(sample1)) + 1)
         sequences_1.append(sequence)
@@ -721,11 +719,11 @@ def linear_regression_datatype_separation_sequences(
 
         with torch.no_grad():
             for batch in dataloader:
-                seqs, _, dts = batch
-                B, L = seqs.size()
+                seqs, lens, dts = batch
+                B, _ = seqs.size()
                 _ = model(seqs)
                 x1 = buf.pop(0)  # [B, L, C]
-                seq_reps = x1[torch.arange(x1.size(0)), L + 1, :]  # eos reps
+                seq_reps = x1[torch.arange(x1.size(0)), lens.long() + 1, :]  # eos reps
                 reps += seq_reps
                 dtypes += dts
 

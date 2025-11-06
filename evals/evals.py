@@ -2,11 +2,11 @@ import torch
 import numpy as np
 
 
-def arith_evals(cfg, model, dataset, device, print_samples):
+def arith_evals(cfg, model, grammar, device, print_samples):
     model.eval()
     eval_bsize = 128
     with torch.no_grad():
-        inputs = torch.tensor(dataset.vocab["<bos>"]).repeat(eval_bsize, 1).to(device)
+        inputs = torch.tensor(grammar.vocab["<bos>"]).repeat(eval_bsize, 1).to(device)
 
         samples, per_token_logprobs = model.sample(
             inputs=inputs,
@@ -16,7 +16,7 @@ def arith_evals(cfg, model, dataset, device, print_samples):
 
         samples = samples.cpu().numpy()
         samples = [
-            dataset.detokenize_sentence(s)
+            grammar.detokenize_sentence(s)
             .split("<eos>")[0]
             .split("<bos>")[1]
             .strip(" ")
@@ -34,7 +34,7 @@ def arith_evals(cfg, model, dataset, device, print_samples):
             if sid < print_samples:
                 print("checking grammaticality of")
                 print(s)
-            grammaticality = dataset.check_validity(s)
+            grammaticality = grammar.check_validity(s)
             model_logprobs.append(
                 per_token_logprobs[sid, : len(s.split())].sum().item()
             )

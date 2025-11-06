@@ -24,7 +24,6 @@ class ArithGrammar:
             max_sample_length (int, optional): The maximum length of a sequence. Defaults to 128.
             seed (int, optional): The random seed. Defaults to 42.
         """
-        random.seed(seed)
         np.random.seed(seed)
 
         # Some setup details
