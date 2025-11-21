@@ -1,7 +1,7 @@
 from analysis.trends import plot_evolution_trends
 from torch import tensor
 
-run_name = "zrfoffu4"
+run_name = "5iipl67m"
 results = eval(open(f"{run_name}_trends.txt", "r").read())
 # {accuracy_trends: Dict[int, float],
 #  distance_bw_datatypes: Dict[int, float],
