@@ -1,5 +1,5 @@
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, RandomSampler
 import torch.nn.functional as F
 import os
 from .PCFG import PCFG
@@ -17,6 +17,7 @@ def get_dataloader(
         "n_adverbs": 10,
         "n_conjunctions": 2,
     },  # config for PCFG. see below for other languages.
+    test_gen: bool = False,
     replication=(2, 1),  # (D, T)
     alpha: float = 1e5,
     prior_type: str = "dirichlet",
@@ -68,6 +69,7 @@ def get_dataloader(
         language=language,
         config=config,
         replication=replication,
+        test_gen=test_gen,
         alpha=alpha,
         prior_type=prior_type,
         num_iters=num_iters,
@@ -78,7 +80,7 @@ def get_dataloader(
     # Create a dataloader
     dataloader = DataLoader(
         dataset,
-        sampler=torch.utils.data.RandomSampler(dataset, replacement=True),
+        sampler=RandomSampler(dataset, replacement=True),
         shuffle=False,
         pin_memory=True,
         batch_size=batch_size,
@@ -96,6 +98,7 @@ class ArithDataset:
     def __init__(
         self,
         replication=(2, 1),  # only works with D = 2
+        test_gen: bool = False,  # if true, remove a subset of datatype 1 to test generalization
         num_iters: int = 1e6,
         max_sample_length: int = 128,
         seed: int = 42,
@@ -116,6 +119,7 @@ class ArithDataset:
         self.num_iters = int(num_iters)
         self.max_sample_length = max_sample_length
         self.seed = seed
+        self.test_gen = test_gen
 
         # Define datatype distribution
         self.datatype_distribution = F.softmax(
@@ -173,6 +177,9 @@ class ArithDataset:
             # Generate arithmetic sample
             sample = self.grammar.generate_sample(dtype)
 
+            if dtype == 1 and self.test_gen and self.grammar.is_held_out(sample):
+                continue  # skip if test generation and sample is held out in dtype 1
+
             # Tokenize the sequence
             sequence = torch.tensor(self.grammar.tokenize_sentence(sample))
             seq_length = float(sequence.size(0))
@@ -216,6 +223,7 @@ class PCFGDataset:
             "n_adverbs": 10,
             "n_conjunctions": 2,
         },  # config for PCFG. see below for other languages.
+        test_gen: bool = False,  # if true, remove a subset of datatype 1 to test generalization
         replication=(2, 1),
         alpha: float = 1e5,
         prior_type: str = "dirichlet",
@@ -256,6 +264,7 @@ class PCFGDataset:
         # Some setup details
         self.num_iters = int(num_iters)
         self.max_sample_length = max_sample_length
+        self.test_gen = test_gen
 
         # Define the PCFG
         self.PCFG = PCFG(
@@ -325,6 +334,9 @@ class PCFGDataset:
                 continue
 
             dtype = torch.multinomial(self.datatype_distribution, 1).squeeze().item()
+
+            if dtype == 1 and self.test_gen and self.PCFG.is_held_out(sequence):
+                continue  # skip if test generation and sample is held out in dtype 1
 
             # Tokenize the sequence
             sequence = torch.tensor(self.PCFG.tokenize_sentence(sequence, dtype))

@@ -27,6 +27,7 @@ def main(cfg):
     dataloader = get_dataloader(
         language=cfg.data.language,
         config=cfg.data.config,
+        test_gen=cfg.data.test_gen,
         replication=(cfg.data.D, cfg.data.T),
         alpha=cfg.data.alpha,
         prior_type=cfg.data.prior_type,
