@@ -53,6 +53,7 @@ def load_model_and_grammar(
     model.eval()
 
     # Create dataloader
+    # This is only for testing/evaluating: no test_gen flag
     dataloader = get_dataloader(
         language=cfg.data.language,
         config=cfg.data.config,
@@ -868,6 +869,65 @@ def linear_regression_datatype_separation_sequences(
     return results
 
 
+def generalization_experiment(
+    model: GPT,
+    grammar: Any,
+    num_sequences: int = 1000,
+    verbose: bool = True,
+    show_progress: bool = True,
+):
+    """
+    Run generalization experiment to test if the model can generalize to held-out datatypes.
+    Pass held-out inputs to the model and check resulting continuations for validity/grammaticality.
+    """
+
+    inputs = grammar.held_out_inputs * (num_sequences // len(grammar.held_out_inputs))
+    lengths = list(set(len(i) for i in inputs))
+    num_total = len(inputs)
+    num_correct = 0
+
+    input_sets = [[i for i in inputs if len(i) == L] for L in lengths]
+    input_sets = [torch.tensor(inputs) for inputs in input_sets]
+
+    all_samples = []
+    for inputs in input_sets:
+        samples, _ = model.sample(
+            inputs=inputs,
+            max_new_tokens=128,
+            retrieve_llhoods="tokens",
+        )
+
+        samples = samples.cpu().numpy()
+        samples = [
+            grammar.detokenize_sentence(s)
+            .split("<eos>")[0]
+            .split("<bos>")[1]
+            .strip(" ")
+            for s in samples
+        ]
+        all_samples += samples
+
+    iterator = (
+        tqdm(samples, desc="Checking validity of generations")
+        if show_progress
+        else samples
+    )
+    for s in iterator:
+        try:
+            grammaticality = grammar.check_validity(s)
+        except:
+            (grammaticality, _, _, _), _ = grammar.check_grammaticality(s)
+
+        if grammaticality:
+            num_correct += 1
+            if verbose:
+                print("Valid:", s)
+
+    if verbose:
+        print(f"{num_correct} correct continuations out of {num_total} samples")
+    return {"num_valid_continuations": num_correct, "num_samples_total": num_total}
+
+
 def representation_intervention_experiment(
     model: GPT,
     grammar: Any,
@@ -1181,6 +1241,11 @@ def main():
         help="Run representation intervention experiment",
     )
     parser.add_argument(
+        "--test_gen",
+        action="store_true",
+        help="Run generalization evaluation",
+    )
+    parser.add_argument(
         "--all",
         action="store_true",
         help="Run all analyses (default if no specific analysis is selected)",
@@ -1221,6 +1286,7 @@ def main():
             args.distance,
             args.linear_regression,
             args.intervention,
+            args.test_gen,
         ]
     ):
         args.all = True
@@ -1277,6 +1343,12 @@ def main():
         representation_intervention_experiment(
             model, grammar, num_experiments=args.num_experiments
         )
+
+    if args.all or args.test_gen:
+        print("\n" + "=" * 50)
+        print("5. GENERALIZATION EVALUATION")
+        print("=" * 50)
+        generalization_experiment(model, grammar, num_sequences=args.num_sequences)
 
 
 if __name__ == "__main__":
