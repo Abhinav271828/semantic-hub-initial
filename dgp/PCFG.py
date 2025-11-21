@@ -235,6 +235,9 @@ class PCFG:
             rhs_symbol = rhs_symbol[:-3]
             self.lexical_symbolic_rules += f"{symbol_type} -> {rhs_symbol} \n"
 
+        self.held_out_prefixes = ["pro"]
+        self.held_out_inputs = [f"pro{i}" for i in range(n_pronouns)]
+
         # Create the grammar
         return ProbabilisticGenerator.fromstring(
             self.production_rules + self.lexical_symbolic_rules
@@ -289,6 +292,9 @@ class PCFG:
             rhs_symbol = rhs_symbol[:-3]
             self.lexical_symbolic_rules += f"{symbol_type} -> {rhs_symbol} \n"
 
+        self.held_out_prefixes = ["tern"]
+        self.held_out_inputs = [f"tern{i}-1" for i in range(n_ops)]
+
         # Create the grammar
         return ProbabilisticGenerator.fromstring(
             self.production_rules + self.lexical_symbolic_rules
@@ -324,6 +330,9 @@ class PCFG:
             self.production_rules += (
                 f"Brack{i} -> 'o{i}' S 'c{i}' [0.50] | 'o{i}' 'c{i}' [0.50]\n"
             )
+
+        self.held_out_prefixes = ["o0"]
+        self.held_out_inputs = ["o0-1"]
 
         self.lexical_symbolic_rules = ""
 
@@ -378,6 +387,10 @@ class PCFG:
 
         # Create an inverse vocabulary
         id_to_token_map = {v: k for k, v in vocab.items()}
+
+        self.held_out_inputs = [
+            [vocab["<bos>"], vocab[t]] for t in self.held_out_inputs
+        ]
 
         return vocab, id_to_token_map, vocab_size
 
@@ -441,6 +454,20 @@ class PCFG:
         # Fill the sentences with values from the concept classes
         for s in symbolic_sentences:
             yield s
+
+    def is_held_out(self, sentence: str) -> bool:
+        """Check if a sentence is held out
+
+        Args:
+            sentence: The sentence to check.
+
+        Returns:
+            Whether the sentence is held out
+        """
+        first = sentence.split(" ")[0]
+        if any(first[: len(pfx)] == pfx for pfx in self.held_out_prefixes):
+            return True
+        return False
 
     def check_grammaticality(self, sentence: str) -> bool:
         """Check if a sentence is in the grammar.

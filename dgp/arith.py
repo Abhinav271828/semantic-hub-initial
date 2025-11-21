@@ -130,6 +130,10 @@ class ArithGrammar:
 
         # Create inverse vocabulary
         id_to_token_map = {v: k for k, v in vocab.items()}
+        self.held_out_inputs = [
+            [vocab["<bos>"]] + [vocab[t] for t in self._number_to_words(i).split(" ")]
+            for i in range(200, 300)
+        ]
 
         return vocab, id_to_token_map, vocab_size
 
@@ -302,12 +306,18 @@ class ArithGrammar:
                 f"{convert1(a)} + {convert1(b)} = {convert1(c)}",
             )
 
+    def is_held_out(self, sample):
+
+        if sample[:3] == "two":
+            return True
+
+        return False
+
     def tokenize_sentence(self, sentence: str):
         """Tokenize a sentence.
 
         Args:
             sentence: The sentence to tokenize
-            dtype: The datatype index
 
         Returns:
             List of token indices
