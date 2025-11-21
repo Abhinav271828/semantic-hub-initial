@@ -21,7 +21,9 @@ from analysis.analysis import (
     linear_regression_datatype_separation_tokens,
     linear_regression_datatype_separation_sequences,
     representation_intervention_experiment,
+    generalization_experiment,
 )
+from evals.evals import arith_evals, grammar_evals
 
 
 def extract_distances_from_results(datatype_results: Dict) -> Dict[str, float]:
@@ -103,6 +105,8 @@ def analyze_checkpoint_evolution(
         "invalid": {},  # {step: percentage}
         "valid": {},  # {step: percentage}
     }
+    generalization_trends = {}  # {step: generalization accuracy}
+    in_distribution_trends = {}  # {step: in-distribution accuracy}
 
     for step in checkpoint_steps:
         ckpt_name = f"ckpt_{step}.pt"
@@ -116,7 +120,7 @@ def analyze_checkpoint_evolution(
 
             # Run all analysis functions from analysis.py
             # 1. Distance analysis (includes both average and datatype-specific distances)
-            print("  [1/3] Starting distance analysis...")
+            print("  [1/4] Starting distance analysis...")
             match cfg.data.unit:
                 case "tok":
                     datatype_results = analyze_datatype_embedding_distances_tokens(
@@ -145,10 +149,10 @@ def analyze_checkpoint_evolution(
             distance_bw_datatypes[step] = distance_results["normalized_distances"]
             overall_avg_distances[step] = distance_results["overall_avg_distances"]
 
-            print("  [1/3] Finished distance analysis")
+            print("  [1/4] Finished distance analysis")
 
             # 2. Linear regression for datatype separation
-            print("  [2/3] Starting linear regression...")
+            print("  [2/4] Starting linear regression...")
             match cfg.data.unit:
                 case "tok":
                     lr_results = linear_regression_datatype_separation_tokens(
@@ -169,11 +173,11 @@ def analyze_checkpoint_evolution(
                         verbose=False,
                     )
             accuracy_trends[step] = lr_results["accuracy"]
-            print("  [2/3] Finished linear regression")
+            print("  [2/4] Finished linear regression")
 
             if cfg.data.unit == "tok":
                 # 3. Representation intervention experiments
-                print("  [3/3] Starting intervention experiments...")
+                print("  [3/4] Starting intervention experiments...")
                 intervention_results = representation_intervention_experiment(
                     model,
                     grammar,
@@ -205,20 +209,62 @@ def analyze_checkpoint_evolution(
                         * 100
                     )
 
-                print("  [3/3] Finished intervention experiments")
+                print("  [3/4] Finished intervention experiments")
+
+                print("  [4/5] Starting generalization evaluation...")
+                generalization_results = generalization_experiment(
+                    model,
+                    grammar,
+                    num_sequences=num_sequences,
+                    verbose=False,
+                    show_progress=True,
+                )
+                generalization_trends[step] = (
+                    generalization_results["num_valid_continuations"]
+                    / generalization_results["num_samples_total"]
+                )
+                print("  [4/5] Finished generalization evaluation")
+
+                print("  [5/5] Starting in-distribution evaluation...")
+                device = next(model.parameters()).device
+                if cfg.data.language == "arith":
+                    in_dist_results = arith_evals(
+                        cfg,
+                        model,
+                        grammar,
+                        device,
+                        print_samples=0,
+                    )
+                else:
+                    in_dist_results = grammar_evals(
+                        cfg,
+                        model,
+                        grammar,
+                        device,
+                        print_samples=0,
+                    )
+                in_distribution_trends[step] = in_dist_results["validity"]
+                print("  [5/5] Finished in-distribution evaluation")
 
                 # Write to a file after each step to prevent loss in case of break
                 # This can be plotted afterwards with `plot_from_file.py`
                 with open(f"{run_name}_trends.txt", "w") as f:
                     f.write(
-                        {
-                            "distance_bw_datatypes": distance_bw_datatypes,
-                            "overall_avg_distances": overall_avg_distances,
-                            "accuracy_trends": accuracy_trends,
-                            "intervention_trends": (
-                                intervention_trends if cfg.data.unit == "tok" else None
-                            ),
-                        }
+                        str(
+                            {
+                                "distance_bw_datatypes": distance_bw_datatypes,
+                                "overall_avg_distances": overall_avg_distances,
+                                "accuracy_trends": accuracy_trends,
+                                "intervention_trends": (
+                                    intervention_trends
+                                    if cfg.data.unit == "tok"
+                                    else None
+                                ),
+                                "generalization_trends": generalization_trends,
+                                "in_distribution_trends": in_distribution_trends,
+                            }
+                        )
+                        + "\n"
                     )
 
         except FileNotFoundError:
@@ -233,6 +279,8 @@ def analyze_checkpoint_evolution(
         "overall_avg_distances": overall_avg_distances,
         "accuracy_trends": accuracy_trends,
         "intervention_trends": intervention_trends if cfg.data.unit == "tok" else None,
+        "generalization_trends": generalization_trends,
+        "in_distribution_trends": in_distribution_trends,
     }
 
 
@@ -241,6 +289,8 @@ def plot_evolution_trends(
     overall_avg_distances: Dict[int, float],
     accuracy_trends: Dict[int, float] = None,
     intervention_trends: Dict[str, Dict[int, float]] = None,
+    generalization_trends: Dict[int, float] = None,
+    in_distribution_trends: Dict[int, float] = None,
     save_path: str = None,
 ):
     """
@@ -251,11 +301,13 @@ def plot_evolution_trends(
     - Figure 2: Raw family distances and overall average distance baseline
     - Figure 3: Linear regression accuracy for datatype classification
     - Figure 4: Intervention experiment percentages (empty, invalid, valid continuations)
+    - Figure 5: Generalization experiment percentages
 
     Args:
         overall_distances: Dictionary mapping checkpoint steps to overall avg distances
         accuracy_trends: Dictionary mapping checkpoint steps to linear regression accuracy
         intervention_trends: Dictionary with 'empty', 'invalid', 'valid' keys, each mapping steps to percentages
+        generalization_trends: Dictionary mapping checkpoint steps to held-out accuracy
         save_path: Optional base path for saving figures (will append suffixes)
     """
     # Sort checkpoint steps
@@ -425,6 +477,66 @@ def plot_evolution_trends(
 
         plt.show()
 
+    # Figure 5: Generalization and in-distribution accuracy
+    has_generalization = (
+        generalization_trends is not None and len(generalization_trends) > 0
+    )
+    has_in_distribution = (
+        in_distribution_trends is not None and len(in_distribution_trends) > 0
+    )
+
+    if has_generalization or has_in_distribution:
+        fig5, ax5 = plt.subplots(figsize=(10, 6))
+
+        # Plot generalization accuracy progression across training
+        if has_generalization:
+            generalization_steps = sorted(generalization_trends.keys())
+            generalization_values = [
+                generalization_trends[s] for s in generalization_steps
+            ]
+
+            ax5.plot(
+                generalization_steps,
+                generalization_values,
+                marker="o",
+                label="Generalization (Held-out)",
+                linewidth=2.5,
+                color="purple",
+            )
+
+        # Plot in-distribution accuracy progression across training
+        if has_in_distribution:
+            in_dist_steps = sorted(in_distribution_trends.keys())
+            in_dist_values = [in_distribution_trends[s] for s in in_dist_steps]
+
+            ax5.plot(
+                in_dist_steps,
+                in_dist_values,
+                marker="s",
+                label="In-distribution",
+                linewidth=2.5,
+                color="green",
+            )
+
+        ax5.set_xlabel("Training Step", fontsize=12)
+        ax5.set_ylabel("Accuracy", fontsize=12)
+        ax5.set_title(
+            "Model Accuracy Across Training",
+            fontsize=14,
+        )
+        ax5.set_ylim([0, 1.05])  # Accuracy is between 0 and 1
+        ax5.legend(loc="best")
+        ax5.grid(True, alpha=0.3)
+        plt.tight_layout()
+
+        if save_path:
+            fig5.savefig(
+                f"{save_path}_generalization.png", dpi=300, bbox_inches="tight"
+            )
+            print(f"Saved generalization plot to {save_path}_generalization.png")
+
+        plt.show()
+
 
 def main():
     """Main function to run checkpoint evolution analysis"""
@@ -478,6 +590,8 @@ def main():
         overall_avg_distances=results["overall_avg_distances"],
         accuracy_trends=results["accuracy_trends"],
         intervention_trends=results["intervention_trends"],
+        generalization_trends=results["generalization_trends"],
+        in_distribution_trends=results["in_distribution_trends"],
         save_path=args.save_path,
     )
 
