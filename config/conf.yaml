@@ -9,6 +9,7 @@ epochs: 5
 data:
   language: 'arith' # ['english', 'expr', 'dyck', 'arith']
   unit: 'seq' # ['seq' or 'tok']
+  test_gen: True
   config:
     # n_digits: 10
     # n_ops: 3
@@ -18,7 +19,7 @@ data:
     # n_adjectives: 5
     # n_pronouns: 5
     # n_adverbs: 2
-    # n_conjunctions: 1
+    # n_conjunctions: 2
     # n_brackets: 2
   D: 2 # number of distinct datatypes
   T: 1 # each datatype has probability acc to softmax([0, -T, -2T, ..., -(D-1)T])
