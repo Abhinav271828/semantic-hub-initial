@@ -120,7 +120,7 @@ def analyze_checkpoint_evolution(
 
             # Run all analysis functions from analysis.py
             # 1. Distance analysis (includes both average and datatype-specific distances)
-            print("  [1/4] Starting distance analysis...")
+            print("  [1/5] Starting distance analysis...")
             match cfg.data.unit:
                 case "tok":
                     datatype_results = analyze_datatype_embedding_distances_tokens(
@@ -149,10 +149,10 @@ def analyze_checkpoint_evolution(
             distance_bw_datatypes[step] = distance_results["normalized_distances"]
             overall_avg_distances[step] = distance_results["overall_avg_distances"]
 
-            print("  [1/4] Finished distance analysis")
+            print("  [1/5] Finished distance analysis")
 
             # 2. Linear regression for datatype separation
-            print("  [2/4] Starting linear regression...")
+            print("  [2/5] Starting linear regression...")
             match cfg.data.unit:
                 case "tok":
                     lr_results = linear_regression_datatype_separation_tokens(
@@ -173,11 +173,11 @@ def analyze_checkpoint_evolution(
                         verbose=False,
                     )
             accuracy_trends[step] = lr_results["accuracy"]
-            print("  [2/4] Finished linear regression")
+            print("  [2/5] Finished linear regression")
 
             if cfg.data.unit == "tok":
                 # 3. Representation intervention experiments
-                print("  [3/4] Starting intervention experiments...")
+                print("  [3/5] Starting intervention experiments...")
                 intervention_results = representation_intervention_experiment(
                     model,
                     grammar,
@@ -209,63 +209,61 @@ def analyze_checkpoint_evolution(
                         * 100
                     )
 
-                print("  [3/4] Finished intervention experiments")
+                print("  [3/5] Finished intervention experiments")
 
-                print("  [4/5] Starting generalization evaluation...")
-                generalization_results = generalization_experiment(
+            print("  [4/5] Starting generalization evaluation...")
+            generalization_results = generalization_experiment(
+                model,
+                grammar,
+                num_sequences=num_sequences,
+                verbose=False,
+                show_progress=True,
+            )
+            generalization_trends[step] = (
+                generalization_results["num_valid_continuations"]
+                / generalization_results["num_samples_total"]
+            )
+            print("  [4/5] Finished generalization evaluation")
+
+            print("  [5/5] Starting in-distribution evaluation...")
+            device = next(model.parameters()).device
+            if cfg.data.language == "arith":
+                in_dist_results = arith_evals(
+                    cfg,
                     model,
                     grammar,
-                    num_sequences=num_sequences,
-                    verbose=False,
-                    show_progress=True,
+                    device,
+                    print_samples=0,
                 )
-                generalization_trends[step] = (
-                    generalization_results["num_valid_continuations"]
-                    / generalization_results["num_samples_total"]
+            else:
+                in_dist_results = grammar_evals(
+                    cfg,
+                    model,
+                    grammar,
+                    device,
+                    print_samples=0,
                 )
-                print("  [4/5] Finished generalization evaluation")
+            in_distribution_trends[step] = in_dist_results["validity"]
+            print("  [5/5] Finished in-distribution evaluation")
 
-                print("  [5/5] Starting in-distribution evaluation...")
-                device = next(model.parameters()).device
-                if cfg.data.language == "arith":
-                    in_dist_results = arith_evals(
-                        cfg,
-                        model,
-                        grammar,
-                        device,
-                        print_samples=0,
+            # Write to a file after each step to prevent loss in case of break
+            # This can be plotted afterwards with `plot_from_file.py`
+            with open(f"{run_name}_trends.txt", "w") as f:
+                f.write(
+                    str(
+                        {
+                            "distance_bw_datatypes": distance_bw_datatypes,
+                            "overall_avg_distances": overall_avg_distances,
+                            "accuracy_trends": accuracy_trends,
+                            "intervention_trends": (
+                                intervention_trends if cfg.data.unit == "tok" else None
+                            ),
+                            "generalization_trends": generalization_trends,
+                            "in_distribution_trends": in_distribution_trends,
+                        }
                     )
-                else:
-                    in_dist_results = grammar_evals(
-                        cfg,
-                        model,
-                        grammar,
-                        device,
-                        print_samples=0,
-                    )
-                in_distribution_trends[step] = in_dist_results["validity"]
-                print("  [5/5] Finished in-distribution evaluation")
-
-                # Write to a file after each step to prevent loss in case of break
-                # This can be plotted afterwards with `plot_from_file.py`
-                with open(f"{run_name}_trends.txt", "w") as f:
-                    f.write(
-                        str(
-                            {
-                                "distance_bw_datatypes": distance_bw_datatypes,
-                                "overall_avg_distances": overall_avg_distances,
-                                "accuracy_trends": accuracy_trends,
-                                "intervention_trends": (
-                                    intervention_trends
-                                    if cfg.data.unit == "tok"
-                                    else None
-                                ),
-                                "generalization_trends": generalization_trends,
-                                "in_distribution_trends": in_distribution_trends,
-                            }
-                        )
-                        + "\n"
-                    )
+                    + "\n"
+                )
 
         except FileNotFoundError:
             print(f"  Error: Checkpoint not found, skipping...")
